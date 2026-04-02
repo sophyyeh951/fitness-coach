@@ -46,3 +46,35 @@ app.include_router(health_router, prefix="/api")
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
+
+
+@app.get("/debug")
+async def debug_check():
+    """Temporary debug endpoint to diagnose issues."""
+    results = {}
+
+    # Test Supabase
+    try:
+        from app.db.client import supabase
+        data = supabase.table("meals").select("id").limit(1).execute()
+        results["supabase"] = "ok"
+    except Exception as e:
+        results["supabase"] = f"error: {e}"
+
+    # Test Gemini
+    try:
+        from google import genai
+        from google.genai import types
+        from app.config import GEMINI_API_KEY
+
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents="Say hi",
+            config=types.GenerateContentConfig(max_output_tokens=10),
+        )
+        results["gemini"] = f"ok: {response.text}"
+    except Exception as e:
+        results["gemini"] = f"error: {e}"
+
+    return results
