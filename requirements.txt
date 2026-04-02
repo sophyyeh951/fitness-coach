@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+line-bot-sdk>=3.5
+google-genai
+supabase
+httpx
+Pillow
+python-dotenv
+matplotlib
+apscheduler
