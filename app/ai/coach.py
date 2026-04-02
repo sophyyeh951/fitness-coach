@@ -90,10 +90,12 @@ async def ask_coach(question: str) -> str:
         config=types.GenerateContentConfig(
             temperature=0.7,
             max_output_tokens=512,
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
         ),
     )
 
-    return response.text.strip()
+    text = response.text
+    return text.strip() if text else "抱歉，我現在沒有回應，請再問一次 🙏"
 
 
 async def parse_workout(text: str) -> dict:
@@ -106,6 +108,7 @@ async def parse_workout(text: str) -> dict:
         config=types.GenerateContentConfig(
             temperature=0.2,
             max_output_tokens=512,
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
         ),
     )
 

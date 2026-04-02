@@ -102,10 +102,11 @@ async def generate_daily_summary(target_date: date | None = None) -> str:
         config=types.GenerateContentConfig(
             temperature=0.5,
             max_output_tokens=512,
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
         ),
     )
 
-    summary_text = response.text.strip()
+    summary_text = (response.text or "").strip()
 
     # Save summary to database
     try:

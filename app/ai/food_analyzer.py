@@ -48,10 +48,11 @@ async def analyze_food_photo(image_bytes: bytes) -> dict:
         config=types.GenerateContentConfig(
             temperature=0.3,
             max_output_tokens=1024,
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
         ),
     )
 
-    raw_text = response.text.strip()
+    raw_text = (response.text or "").strip()
     # Strip markdown code fences if present
     if raw_text.startswith("```"):
         raw_text = raw_text.split("\n", 1)[1]
