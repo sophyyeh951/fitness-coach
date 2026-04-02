@@ -15,7 +15,7 @@ from app.db import queries as db
 logger = logging.getLogger(__name__)
 
 client = genai.Client(api_key=GEMINI_API_KEY)
-MODEL = "gemini-2.0-flash"
+MODEL = "gemini-2.5-flash"
 
 
 async def generate_daily_summary(target_date: date | None = None) -> str:

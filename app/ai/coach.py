@@ -20,7 +20,7 @@ from app.db import queries as db
 logger = logging.getLogger(__name__)
 
 client = genai.Client(api_key=GEMINI_API_KEY)
-MODEL = "gemini-2.0-flash"
+MODEL = "gemini-2.5-flash"
 
 
 def _build_user_context() -> str:
