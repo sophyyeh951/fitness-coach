@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Optional
+from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from app.db import queries as db
@@ -28,18 +28,40 @@ class HealthData(BaseModel):
 
 
 @router.post("/health-data")
-async def receive_health_data(data: HealthData):
+async def receive_health_data(request: Request):
     """
     Receive health data from iOS Shortcuts automation.
 
     The iOS Shortcut reads Apple Health data daily and POSTs here.
     PICOOC data flows: PICOOC app → Apple Health → this endpoint.
     """
+    # Log raw body for debugging
+    raw_body = await request.json()
+    logger.info("Raw health data received: %s", raw_body)
+
+    try:
+        data = HealthData(**raw_body)
+    except Exception as e:
+        logger.error("Validation error: %s", e)
+        return {"status": "error", "detail": str(e), "received": raw_body}
+
     try:
         metrics = data.dict(exclude_none=True)
         result = db.upsert_body_metrics(metrics)
         logger.info("Saved health data for %s: %s", data.date, metrics)
         return {"status": "ok", "saved": result}
-    except Exception:
+    except Exception as e:
         logger.exception("Failed to save health data")
-        raise HTTPException(status_code=500, detail="Failed to save health data")
+        return {"status": "error", "detail": str(e), "received": raw_body}
+
+
+@router.get("/health-debug")
+async def health_debug():
+    """Debug endpoint to check what data exists in body_metrics."""
+    try:
+        from datetime import timedelta
+        today = date.today()
+        metrics = db.get_body_metrics_range(today - timedelta(days=7), today)
+        return {"status": "ok", "recent_metrics": metrics}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
