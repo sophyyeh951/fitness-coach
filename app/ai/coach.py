@@ -36,7 +36,7 @@ def _build_user_context() -> str:
         total_carb = sum(m.get("carbs", 0) for m in meals)
         total_fat = sum(m.get("fat", 0) for m in meals)
         parts.append(
-            f"今日飲食：已記錄 {len(meals)} 餐，"
+            f"今日飲食：{len(meals)} 餐，"
             f"共 {total_cal:.0f} kcal（蛋白 {total_pro:.0f}g / "
             f"碳水 {total_carb:.0f}g / 脂肪 {total_fat:.0f}g）"
         )
@@ -54,33 +54,64 @@ def _build_user_context() -> str:
         latest = metrics[-1]
         weight = latest.get("weight")
         bf = latest.get("body_fat_pct")
+        steps = latest.get("steps")
         if weight:
             parts.append(f"最新體重：{weight} kg")
         if bf:
             parts.append(f"最新體脂：{bf}%")
+        if steps:
+            parts.append(f"今日步數：{steps}")
+        # Show trend if multiple data points
+        if len(metrics) > 1 and metrics[0].get("weight") and latest.get("weight"):
+            diff = latest["weight"] - metrics[0]["weight"]
+            if abs(diff) > 0.1:
+                direction = "↑" if diff > 0 else "↓"
+                parts.append(f"7天體重趨勢：{direction} {abs(diff):.1f} kg")
 
     # Current goal
     goal = db.get_active_goal()
     if goal:
         goal_map = {"cut": "減脂", "bulk": "增肌", "maintain": "維持"}
         parts.append(
-            f"目前目標：{goal_map.get(goal['goal_type'], goal['goal_type'])}"
+            f"目標：{goal_map.get(goal['goal_type'], goal['goal_type'])}"
         )
         if goal.get("daily_calorie_target"):
             parts.append(f"每日熱量目標：{goal['daily_calorie_target']} kcal")
         if goal.get("daily_protein_target"):
             parts.append(f"每日蛋白質目標：{goal['daily_protein_target']}g")
 
-    return "\n".join(parts) if parts else "（尚無歷史數據）"
+    return "\n".join(parts) if parts else "（尚無數據）"
+
+
+def _build_chat_history() -> str:
+    """Get recent chat history formatted for the prompt."""
+    history = db.get_recent_chat(limit=20)
+    if not history:
+        return "（這是第一次對話）"
+
+    lines = []
+    for msg in history:
+        role = "我" if msg["role"] == "user" else "小健"
+        lines.append(f"{role}：{msg['message'][:200]}")
+
+    return "\n".join(lines)
 
 
 async def ask_coach(question: str) -> str:
-    """Ask the AI coach a question with user context."""
+    """Ask the AI coach a question with user context and chat history."""
+    # Save user message
+    try:
+        db.save_chat_message("user", question)
+    except Exception:
+        logger.exception("Failed to save user message")
+
     user_data = _build_user_context()
+    chat_history = _build_chat_history()
 
     prompt = COACH_QUERY_TEMPLATE.format(
         system_context=COACH_SYSTEM_PROMPT,
         user_data=user_data,
+        chat_history=chat_history,
         question=question,
     )
 
@@ -95,7 +126,15 @@ async def ask_coach(question: str) -> str:
     )
 
     text = response.text
-    return text.strip() if text else "抱歉，我現在沒有回應，請再問一次 🙏"
+    reply = text.strip() if text else "抱歉，我現在沒有回應，請再問一次 🙏"
+
+    # Save assistant reply
+    try:
+        db.save_chat_message("assistant", reply)
+    except Exception:
+        logger.exception("Failed to save assistant message")
+
+    return reply
 
 
 async def parse_workout(text: str) -> dict:

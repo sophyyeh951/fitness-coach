@@ -143,6 +143,28 @@ def get_active_goal() -> dict | None:
     return result[0] if result else None
 
 
+# --- Chat History ---
+
+def save_chat_message(role: str, message: str) -> dict:
+    return (
+        supabase.table("chat_history")
+        .insert({"role": role, "message": message})
+        .execute()
+        .data[0]
+    )
+
+
+def get_recent_chat(limit: int = 20) -> list[dict]:
+    return (
+        supabase.table("chat_history")
+        .select("role,message,created_at")
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+        .data
+    )[::-1]  # reverse to chronological order
+
+
 def set_goal(
     goal_type: str,
     target_weight: float | None = None,

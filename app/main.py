@@ -1,6 +1,6 @@
-import asyncio
 import logging
 
+import httpx
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -27,12 +27,25 @@ async def _daily_push_job():
         logger.exception("Failed to push daily summary")
 
 
+async def _keep_alive():
+    """Ping self every 10 minutes to prevent Render free tier from sleeping."""
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                "https://fitness-coach-hv3f.onrender.com/health",
+                timeout=10,
+            )
+            logger.debug("Keep-alive ping: %s", resp.status_code)
+    except Exception:
+        pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Run daily summary at 21:30 local time
     scheduler.add_job(_daily_push_job, "cron", hour=21, minute=30)
+    scheduler.add_job(_keep_alive, "interval", minutes=10)
     scheduler.start()
-    logger.info("Scheduler started — daily summary at 21:30")
+    logger.info("Scheduler started — daily summary at 21:30, keep-alive every 10min")
     yield
     scheduler.shutdown()
 
@@ -46,38 +59,3 @@ app.include_router(health_router, prefix="/api")
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
-
-
-@app.get("/debug")
-async def debug_check():
-    """Temporary debug endpoint to diagnose issues."""
-    results = {}
-
-    # Test Supabase
-    try:
-        from app.db.client import supabase
-        data = supabase.table("meals").select("id").limit(1).execute()
-        results["supabase"] = "ok"
-    except Exception as e:
-        results["supabase"] = f"error: {e}"
-
-    # Test Gemini
-    try:
-        from google import genai
-        from google.genai import types
-        from app.config import GEMINI_API_KEY
-
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents="Say hi in Traditional Chinese",
-            config=types.GenerateContentConfig(
-                max_output_tokens=10,
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
-            ),
-        )
-        results["gemini"] = f"ok: {response.text}"
-    except Exception as e:
-        results["gemini"] = f"error: {e}"
-
-    return results
