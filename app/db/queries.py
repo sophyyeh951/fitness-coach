@@ -165,6 +165,87 @@ def get_recent_chat(limit: int = 20) -> list[dict]:
     )[::-1]  # reverse to chronological order
 
 
+# --- User Profile ---
+
+_profile_cache: dict | None = None
+
+
+def get_user_profile() -> dict | None:
+    global _profile_cache
+    if _profile_cache is not None:
+        return _profile_cache
+    result = (
+        supabase.table("user_profile")
+        .select("*")
+        .limit(1)
+        .execute()
+        .data
+    )
+    _profile_cache = result[0] if result else None
+    return _profile_cache
+
+
+# --- User Context (short-term notes) ---
+
+def get_active_context() -> list[dict]:
+    # Expire old notes first
+    supabase.table("user_context").update(
+        {"is_active": False}
+    ).eq(
+        "is_active", True
+    ).lt(
+        "expires_at", date.today().isoformat()
+    ).execute()
+
+    return (
+        supabase.table("user_context")
+        .select("*")
+        .eq("is_active", True)
+        .order("created_at", desc=True)
+        .limit(10)
+        .execute()
+        .data
+    )
+
+
+def insert_user_context(
+    category: str,
+    content: str,
+    expires_in_days: int | None = None,
+    source_message: str | None = None,
+) -> dict:
+    row = {
+        "category": category,
+        "content": content,
+        "source_message": source_message,
+    }
+    if expires_in_days:
+        from datetime import timedelta
+        row["expires_at"] = (date.today() + timedelta(days=expires_in_days)).isoformat()
+    return (
+        supabase.table("user_context")
+        .insert(row)
+        .execute()
+        .data[0]
+    )
+
+
+# --- Recent Workouts (for AI context) ---
+
+def get_recent_workouts(days: int = 30) -> list[dict]:
+    from datetime import timedelta
+    start = (date.today() - timedelta(days=days)).isoformat()
+    return (
+        supabase.table("workouts")
+        .select("created_at,workout_type,exercises,notes")
+        .gte("created_at", start)
+        .order("created_at", desc=True)
+        .limit(20)
+        .execute()
+        .data
+    )[::-1]  # chronological
+
+
 def set_goal(
     goal_type: str,
     target_weight: float | None = None,

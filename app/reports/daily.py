@@ -88,8 +88,13 @@ async def generate_daily_summary(target_date: date | None = None) -> str:
     else:
         goal_info = "尚未設定目標"
 
+    # User profile for personalized summary
+    from app.ai.coach import _build_profile_context
+    user_profile = _build_profile_context()
+
     # Generate with AI
     prompt = DAILY_SUMMARY_PROMPT.format(
+        user_profile=user_profile,
         meals_summary=meals_summary,
         workout_summary=workout_summary,
         body_data=body_data,

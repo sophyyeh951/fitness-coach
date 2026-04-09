@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import date, timedelta
@@ -14,6 +15,7 @@ from app.ai.prompts import (
     COACH_SYSTEM_PROMPT,
     COACH_QUERY_TEMPLATE,
     WORKOUT_PARSE_PROMPT,
+    CONTEXT_EXTRACTION_PROMPT,
 )
 from app.db import queries as db
 
@@ -23,8 +25,105 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 MODEL = "gemini-2.5-flash"
 
 
+# --------------- Context Builders ---------------
+
+def _build_profile_context() -> str:
+    """Format user profile as context string. Cached in DB layer."""
+    profile = db.get_user_profile()
+    if not profile:
+        return "（尚未設定基本資料）"
+
+    parts = []
+    gender_map = {"female": "女性", "male": "男性"}
+    if profile.get("gender"):
+        parts.append(f"性別：{gender_map.get(profile['gender'], profile['gender'])}")
+    if profile.get("birth_year"):
+        age = date.today().year - profile["birth_year"]
+        parts.append(f"年齡：{age} 歲（{profile['birth_year']}年生）")
+    if profile.get("height_cm"):
+        parts.append(f"身高：{profile['height_cm']}cm")
+    if profile.get("work_style"):
+        parts.append(f"工作：{profile['work_style']}")
+    if profile.get("dietary_restrictions"):
+        parts.append(f"飲食限制：{'、'.join(profile['dietary_restrictions'])}")
+    if profile.get("medical_notes"):
+        parts.append(f"傷病：{profile['medical_notes']}")
+
+    habits = profile.get("exercise_habits", {})
+    if habits:
+        schedule = habits.get("schedule", [])
+        for s in schedule:
+            parts.append(f"運動：{s['activity']} {s.get('frequency', '')} ({s.get('duration', '')})")
+        planned = habits.get("planned", [])
+        for p in planned:
+            parts.append(f"計畫：{p['activity']} {p.get('start', '')} {p.get('note', '')}")
+        equip = habits.get("equipment")
+        if equip:
+            parts.append(f"器材：{equip}")
+
+    return "\n".join(parts)
+
+
+def _build_active_context() -> str:
+    """Format active short-term context notes."""
+    notes = db.get_active_context()
+    if not notes:
+        return "（無）"
+
+    category_map = {
+        "injury": "⚠️ 傷痛",
+        "travel": "✈️ 旅行",
+        "schedule": "📅 行程",
+        "mood": "💭 狀態",
+        "preference": "🍽 偏好",
+        "other": "📌 備註",
+    }
+
+    lines = []
+    for n in notes:
+        cat = category_map.get(n["category"], n["category"])
+        expiry = f"（到 {n['expires_at']}）" if n.get("expires_at") else ""
+        lines.append(f"• {cat} {n['content']}{expiry}")
+
+    return "\n".join(lines)
+
+
+def _build_recent_workouts() -> str:
+    """Summarize recent workouts for AI context."""
+    workouts = db.get_recent_workouts(days=30)
+    if not workouts:
+        return "（最近 30 天無訓練紀錄）"
+
+    lines = []
+    for w in workouts[-10:]:  # last 10 workouts max
+        date_str = w["created_at"][:10]
+        wtype = w.get("workout_type", "")
+        exercises = w.get("exercises", [])
+
+        # Summarize key exercises with weights
+        ex_parts = []
+        for ex in exercises[:5]:  # max 5 per workout
+            name = ex.get("name", "?")
+            weight = ex.get("weight_kg")
+            reps = ex.get("reps")
+            sets = ex.get("sets")
+            parts = [name]
+            if weight:
+                parts.append(f"{weight}kg")
+            if reps and sets:
+                parts.append(f"{reps}x{sets}")
+            ex_parts.append(" ".join(parts))
+
+        ex_summary = "、".join(ex_parts)
+        notes = w.get("notes", "")
+        note_str = f" [{notes[:50]}]" if notes else ""
+        lines.append(f"{date_str} {wtype}：{ex_summary}{note_str}")
+
+    return "\n".join(lines)
+
+
 def _build_user_context() -> str:
-    """Gather recent user data to give the AI context."""
+    """Gather recent user data (today's meals, workouts, metrics, goal)."""
     today = date.today()
     parts = []
 
@@ -61,7 +160,6 @@ def _build_user_context() -> str:
             parts.append(f"最新體脂：{bf}%")
         if steps:
             parts.append(f"今日步數：{steps}")
-        # Show trend if multiple data points
         if len(metrics) > 1 and metrics[0].get("weight") and latest.get("weight"):
             diff = latest["weight"] - metrics[0]["weight"]
             if abs(diff) > 0.1:
@@ -72,22 +170,22 @@ def _build_user_context() -> str:
     goal = db.get_active_goal()
     if goal:
         goal_map = {"cut": "減脂", "bulk": "增肌", "maintain": "維持"}
-        parts.append(
-            f"目標：{goal_map.get(goal['goal_type'], goal['goal_type'])}"
-        )
+        parts.append(f"目標：{goal_map.get(goal['goal_type'], goal['goal_type'])}")
         if goal.get("daily_calorie_target"):
             parts.append(f"每日熱量目標：{goal['daily_calorie_target']} kcal")
         if goal.get("daily_protein_target"):
             parts.append(f"每日蛋白質目標：{goal['daily_protein_target']}g")
+        if goal.get("target_body_fat"):
+            parts.append(f"目標體脂：{goal['target_body_fat']}%")
 
-    return "\n".join(parts) if parts else "（尚無數據）"
+    return "\n".join(parts) if parts else "（今日尚無數據）"
 
 
 def _build_chat_history() -> str:
     """Get recent chat history formatted for the prompt."""
     history = db.get_recent_chat(limit=20)
     if not history:
-        return "（這是第一次對話）"
+        return "（第一次對話）"
 
     lines = []
     for msg in history:
@@ -97,19 +195,67 @@ def _build_chat_history() -> str:
     return "\n".join(lines)
 
 
+# --------------- Context Extraction ---------------
+
+async def _extract_and_save_context(message: str):
+    """Background task: extract notable context from user message and save."""
+    try:
+        prompt = CONTEXT_EXTRACTION_PROMPT.format(message=message)
+        response = await client.aio.models.generate_content(
+            model=MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.1,
+                max_output_tokens=256,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            ),
+        )
+
+        raw = (response.text or "").strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1]
+        if raw.endswith("```"):
+            raw = raw.rsplit("```", 1)[0]
+        raw = raw.strip()
+
+        data = json.loads(raw)
+        notes = data.get("notes", [])
+
+        for note in notes:
+            db.insert_user_context(
+                category=note["category"],
+                content=note["content"],
+                expires_in_days=note.get("expires_in_days"),
+                source_message=message[:200],
+            )
+            logger.info("Saved context note: [%s] %s", note["category"], note["content"])
+
+    except Exception:
+        logger.debug("Context extraction skipped or failed", exc_info=True)
+
+
+# --------------- Main Coach Functions ---------------
+
 async def ask_coach(question: str) -> str:
-    """Ask the AI coach a question with user context and chat history."""
+    """Ask the AI coach a question with full multi-layer context."""
     # Save user message
     try:
         db.save_chat_message("user", question)
     except Exception:
         logger.exception("Failed to save user message")
 
+    # Build all context layers
+    user_profile = _build_profile_context()
+    active_context = _build_active_context()
+    recent_workouts = _build_recent_workouts()
     user_data = _build_user_context()
     chat_history = _build_chat_history()
 
     prompt = COACH_QUERY_TEMPLATE.format(
         system_context=COACH_SYSTEM_PROMPT,
+        user_profile=user_profile,
+        active_context=active_context,
+        recent_workouts=recent_workouts,
         user_data=user_data,
         chat_history=chat_history,
         question=question,
@@ -134,6 +280,9 @@ async def ask_coach(question: str) -> str:
     except Exception:
         logger.exception("Failed to save assistant message")
 
+    # Fire-and-forget: extract context from user message
+    asyncio.create_task(_extract_and_save_context(question))
+
     return reply
 
 
@@ -151,7 +300,7 @@ async def parse_workout(text: str) -> dict:
         ),
     )
 
-    raw_text = response.text.strip()
+    raw_text = (response.text or "").strip()
     if raw_text.startswith("```"):
         raw_text = raw_text.split("\n", 1)[1]
     if raw_text.endswith("```"):
