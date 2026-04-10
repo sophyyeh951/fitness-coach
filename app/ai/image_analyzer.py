@@ -91,7 +91,7 @@ BODY_DATA_PROMPT = """\
   "active_calories": 數字或null,
   "resting_heart_rate": 數字或null,
   "source": "資料來源描述（如：PICOOC體脂計、Apple Watch）",
-  "measurement_date": "如果圖中有日期就填 YYYY-MM-DD，沒有就填 null"
+  "measurement_date": "如果圖中有日期就填 YYYY-MM-DD，沒有就填 null。注意：PICOOC 的日期格式是 日/月/年（如 9/4/2026 表示 2026年4月9日，不是9月4日）"
 }
 
 回覆純 JSON，不要其他文字。
