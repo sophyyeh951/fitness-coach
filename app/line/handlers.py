@@ -293,16 +293,40 @@ async def _today_summary() -> str:
     else:
         lines.append("\n💪 今天還沒記錄訓練")
 
-    # --- Total calorie burn (TDEE + active) ---
-    tdee = 1500  # user's sedentary TDEE (BMR 1238 × 1.2)
+    # --- Total calorie burn (2-stage: estimate → actual) ---
+    base_tdee = 1483  # sedentary TDEE (BMR 1236 × 1.2)
+
+    # Check if we have actual Apple Watch data
+    has_actual = False
     active_cal = 0
     if metrics:
         m = metrics[-1]
         active_cal = m.get("active_calories") or 0
+        if active_cal > 0:
+            has_actual = True
 
-    total_burn = tdee + active_cal
-    lines.append(f"\n🔥 預估總消耗：{total_burn:.0f} kcal")
-    lines.append(f"  TDEE {tdee} + 活動消耗 {active_cal:.0f}")
+    if has_actual:
+        # Stage 2: actual data from Apple Watch
+        total_burn = base_tdee + active_cal
+        lines.append(f"\n🔥 總消耗：{total_burn:.0f} kcal（實際）")
+        lines.append(f"  基底 {base_tdee} + 活動 {active_cal:.0f}")
+    else:
+        # Stage 1: estimate based on workout type
+        exercise_estimate = 0
+        exercise_label = "休息日"
+        if workouts:
+            workout_types = [w.get("workout_type", "").lower() for w in workouts]
+            all_types = " ".join(workout_types)
+            if any(k in all_types for k in ["羽球", "有氧", "跑步", "游泳"]):
+                exercise_estimate = 550
+                exercise_label = "羽球/有氧日"
+            else:
+                exercise_estimate = 300
+                exercise_label = "重訓日"
+
+        total_burn = base_tdee + exercise_estimate
+        lines.append(f"\n🔥 預估總消耗：{total_burn:.0f} kcal")
+        lines.append(f"  基底 {base_tdee} + {exercise_label} ~{exercise_estimate}")
 
     # --- Calorie balance ---
     if total_cal > 0:
