@@ -148,25 +148,39 @@ def _build_user_context() -> str:
         workout_names = [w.get("workout_type", "未分類") for w in workouts]
         parts.append(f"今日訓練：{', '.join(workout_names)}")
 
-    # Recent body metrics (last 7 days)
+    # Body metrics: recent for current stats, long-range for trends
     week_ago = today - timedelta(days=7)
-    metrics = db.get_body_metrics_range(week_ago, today)
-    if metrics:
-        latest = metrics[-1]
+    recent_metrics = db.get_body_metrics_range(week_ago, today)
+    if recent_metrics:
+        latest = recent_metrics[-1]
         weight = latest.get("weight")
         bf = latest.get("body_fat_pct")
-        steps = latest.get("steps")
         if weight:
             parts.append(f"最新體重：{weight} kg")
         if bf:
             parts.append(f"最新體脂：{bf}%")
-        if steps:
-            parts.append(f"今日步數：{steps}")
-        if len(metrics) > 1 and metrics[0].get("weight") and latest.get("weight"):
-            diff = latest["weight"] - metrics[0]["weight"]
+
+    # Long-range body composition trend (180 days for cut/bulk tracking)
+    long_ago = today - timedelta(days=180)
+    all_metrics = db.get_body_metrics_range(long_ago, today)
+    if all_metrics and len(all_metrics) > 1:
+        # Weight trend
+        first_w = next((m.get("weight") for m in all_metrics if m.get("weight")), None)
+        last_w = next((m.get("weight") for m in reversed(all_metrics) if m.get("weight")), None)
+        if first_w and last_w:
+            diff = last_w - first_w
             if abs(diff) > 0.1:
                 direction = "↑" if diff > 0 else "↓"
-                parts.append(f"7天體重趨勢：{direction} {abs(diff):.1f} kg")
+                parts.append(f"體重趨勢：{direction} {abs(diff):.1f} kg（{all_metrics[0]['date']}～今）")
+
+        # Body fat trend
+        bf_records = [(m["date"], m["body_fat_pct"]) for m in all_metrics if m.get("body_fat_pct")]
+        if len(bf_records) >= 2:
+            first_bf = bf_records[0]
+            last_bf = bf_records[-1]
+            bf_diff = last_bf[1] - first_bf[1]
+            direction = "↑" if bf_diff > 0 else "↓"
+            parts.append(f"體脂趨勢：{direction} {abs(bf_diff):.1f}%（{first_bf[0]} {first_bf[1]}% → {last_bf[0]} {last_bf[1]}%）")
 
     # Current goal
     goal = db.get_active_goal()
