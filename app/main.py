@@ -59,3 +59,15 @@ app.include_router(health_router, prefix="/api")
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
+
+
+@app.get("/test-coach")
+async def test_coach():
+    """Debug: test the full AI coach flow on the server."""
+    try:
+        from app.ai.coach import ask_coach
+        reply = await ask_coach("測試：今天練什麼好？")
+        return {"status": "ok", "reply": reply}
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
