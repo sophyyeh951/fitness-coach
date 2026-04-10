@@ -71,10 +71,10 @@ async def lifespan(app: FastAPI):
         _morning_checkin,
         CronTrigger(hour=8, minute=0, timezone=TW_TZ),
     )
-    # Evening summary at 21:30 Taiwan time
+    # Evening summary at 23:00 Taiwan time
     scheduler.add_job(
         _evening_summary,
-        CronTrigger(hour=21, minute=30, timezone=TW_TZ),
+        CronTrigger(hour=23, minute=0, timezone=TW_TZ),
     )
     scheduler.add_job(_keep_alive, "interval", minutes=10)
     scheduler.start()
