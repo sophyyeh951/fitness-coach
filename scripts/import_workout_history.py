@@ -7,11 +7,14 @@ Usage:
 Reads the LINE workout log and inserts parsed workouts into Supabase.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import re
 import sys
 from datetime import datetime
+from typing import Optional
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -97,9 +100,19 @@ def parse_workout_file(filepath: str) -> list[dict]:
 
         # Note lines (user observations like "手沒力", "左手很吃力")
         if current_date and len(line) > 2 and not line.startswith("恢復"):
-            # Check if it's a meaningful note (not a date or label)
             if any(kw in line for kw in ["力", "痠", "累", "吃力", "感覺", "無法", "退步", "進步", "不知道", "先熟悉", "中間", "雖然", "下次"]):
                 current_notes.append(line)
+                continue
+
+        # Potential exercise name line (for two-line format)
+        # e.g. "Goblet Squat", "啞鈴硬舉（雙手）", "單手啞鈴划船（靠bench）"
+        cleaned_check = re.sub(r"^[①②③④⑤⑥⑦⑧]\s*", "", line).strip()
+        if current_date and len(cleaned_check) > 1 and not re.match(r"^[0-9]", cleaned_check):
+            cleaned = re.sub(r"^[①②③④⑤⑥⑦⑧]\s*", "", line).strip()
+            if cleaned and "×" not in cleaned and "x" not in cleaned.lower() and "*" not in cleaned:
+                # This looks like an exercise name, save as pending
+                current_exercises.append({"name": cleaned, "reps": None, "sets": None, "weight_kg": None})
+                continue
 
     _flush()
     return workouts

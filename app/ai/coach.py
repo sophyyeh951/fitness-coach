@@ -103,7 +103,7 @@ def _build_recent_workouts() -> str:
         # Summarize key exercises with weights
         ex_parts = []
         for ex in exercises[:5]:  # max 5 per workout
-            name = ex.get("name", "?")
+            name = ex.get("name") or "?"
             weight = ex.get("weight_kg")
             reps = ex.get("reps")
             sets = ex.get("sets")
