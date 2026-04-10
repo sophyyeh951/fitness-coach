@@ -1,12 +1,13 @@
 import asyncio
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Header, Request, HTTPException
+from fastapi import APIRouter, Header, Request, HTTPException
 from linebot.v3 import WebhookParser
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import (
     AsyncApiClient,
     AsyncMessagingApi,
+    AsyncMessagingApiBlob,
     Configuration,
     PushMessageRequest,
     ReplyMessageRequest,
@@ -29,6 +30,10 @@ def get_line_api() -> AsyncMessagingApi:
     return AsyncMessagingApi(AsyncApiClient(config))
 
 
+def get_line_blob_api() -> AsyncMessagingApiBlob:
+    return AsyncMessagingApiBlob(AsyncApiClient(config))
+
+
 async def _process_event(event: MessageEvent):
     """Process a LINE event in the background so webhook returns 200 quickly."""
     line_api = get_line_api()
@@ -39,7 +44,8 @@ async def _process_event(event: MessageEvent):
             reply_text = await handle_text_message(event.message.text)
         elif isinstance(event.message, ImageMessageContent):
             logger.info("Processing image: %s", event.message.id)
-            reply_text = await handle_image_message(event.message.id, line_api)
+            blob_api = get_line_blob_api()
+            reply_text = await handle_image_message(event.message.id, blob_api)
         else:
             reply_text = "目前支援文字和圖片訊息喔！"
 

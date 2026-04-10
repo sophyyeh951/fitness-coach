@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 
-from linebot.v3.messaging import AsyncMessagingApi
+from linebot.v3.messaging import AsyncMessagingApiBlob
 
 from app.ai.food_analyzer import analyze_food_photo, format_food_analysis
 from app.ai.coach import ask_coach, parse_workout
@@ -43,11 +43,11 @@ async def handle_text_message(text: str) -> str:
 
 async def handle_image_message(
     message_id: str,
-    line_api: AsyncMessagingApi,
+    blob_api: AsyncMessagingApiBlob,
 ) -> str:
     """Handle incoming image messages — analyze food photo."""
-    # Download image from LINE
-    response = await line_api.get_message_content(message_id)
+    # Download image from LINE using blob API
+    response = await blob_api.get_message_content(message_id)
     image_bytes = response
 
     # Analyze with Gemini Vision
