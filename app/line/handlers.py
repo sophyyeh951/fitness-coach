@@ -292,16 +292,16 @@ async def _today_summary() -> str:
     else:
         lines.append("\n💪 今天還沒記錄訓練")
 
-    # --- Total calorie burn (BMR + active) ---
-    bmr = 1250  # user's estimated BMR from PICOOC
+    # --- Total calorie burn (TDEE + active) ---
+    tdee = 1500  # user's sedentary TDEE (BMR 1238 × 1.2)
     active_cal = 0
     if metrics:
         m = metrics[-1]
         active_cal = m.get("active_calories") or 0
 
-    total_burn = bmr + active_cal
+    total_burn = tdee + active_cal
     lines.append(f"\n🔥 預估總消耗：{total_burn:.0f} kcal")
-    lines.append(f"  基礎代謝 {bmr} + 活動消耗 {active_cal:.0f}")
+    lines.append(f"  TDEE {tdee} + 活動消耗 {active_cal:.0f}")
 
     # --- Calorie balance ---
     if total_cal > 0:
@@ -311,24 +311,22 @@ async def _today_summary() -> str:
         else:
             lines.append(f"  → 盈餘 {balance:.0f} kcal")
 
-    # --- Goal: only show if significantly over/under ---
+    # --- Goal warnings: only when clearly off track ---
     goal = db.get_active_goal()
     if goal and total_cal > 0:
         cal_target = goal.get("daily_calorie_target")
-        pro_target = goal.get("daily_protein_target")
         warnings = []
 
         if cal_target:
             diff = total_cal - cal_target
-            # Only warn if >10% over target
             if diff > cal_target * 0.1:
                 warnings.append(f"⚠️ 超過熱量目標 {diff:.0f} kcal")
 
-        if pro_target:
-            pro_diff = pro_target - total_pro
-            # Only warn if >10% under target
-            if pro_diff > pro_target * 0.1:
-                warnings.append(f"🥩 蛋白質還差 {pro_diff:.0f}g")
+        # Protein: range is 1.6-2.2x body weight (86-118g)
+        # Only warn if below lower bound (86g)
+        protein_lower = 86
+        if total_pro < protein_lower:
+            warnings.append(f"🥩 蛋白質偏低（{total_pro:.0f}g），建議至少 {protein_lower}g")
 
         if warnings:
             lines.append("\n" + "\n".join(warnings))
