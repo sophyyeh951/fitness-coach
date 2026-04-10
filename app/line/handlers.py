@@ -122,10 +122,17 @@ async def _handle_body_data_image(image_bytes: bytes) -> str:
         metrics["bmi"] = result["bmi"]
     if result.get("steps") is not None:
         metrics["steps"] = result["steps"]
-    if result.get("active_calories") is not None:
-        metrics["active_calories"] = result["active_calories"]
     if result.get("resting_heart_rate") is not None:
         metrics["resting_heart_rate"] = result["resting_heart_rate"]
+
+    # Active calories: accumulate instead of overwrite
+    new_active = result.get("active_calories")
+    if new_active is not None and new_active > 0:
+        existing = db.get_body_metrics_range(today, today)
+        if existing and existing[-1].get("active_calories"):
+            metrics["active_calories"] = existing[-1]["active_calories"] + new_active
+        else:
+            metrics["active_calories"] = new_active
 
     try:
         db.upsert_body_metrics(metrics)

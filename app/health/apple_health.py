@@ -48,6 +48,13 @@ async def receive_health_data(request: Request):
     try:
         metrics = data.dict(exclude_none=True)
         metrics["date"] = data.date.isoformat()
+
+        # Active calories: accumulate instead of overwrite
+        if data.active_calories and data.active_calories > 0:
+            existing = db.get_body_metrics_range(data.date, data.date)
+            if existing and existing[-1].get("active_calories"):
+                metrics["active_calories"] = existing[-1]["active_calories"] + data.active_calories
+
         result = db.upsert_body_metrics(metrics)
         logger.info("Saved health data for %s: %s", data.date, metrics)
         return {"status": "ok", "saved": result}
