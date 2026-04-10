@@ -266,7 +266,7 @@ async def ask_coach(question: str) -> str:
         contents=prompt,
         config=types.GenerateContentConfig(
             temperature=0.7,
-            max_output_tokens=800,
+            max_output_tokens=1000,
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         ),
     )
