@@ -17,6 +17,7 @@ from app.ai.prompts import (
     WORKOUT_PARSE_PROMPT,
     CONTEXT_EXTRACTION_PROMPT,
     FOOD_MENTION_PROMPT,
+    WORKOUT_MENTION_PROMPT,
 )
 from app.db import queries as db
 
@@ -238,7 +239,9 @@ async def _extract_and_save_context(message: str):
 async def _extract_and_save_food(message: str):
     """Background task: detect food mentions and save to meals table."""
     try:
-        prompt = FOOD_MENTION_PROMPT.format(message=message)
+        from datetime import datetime as dt
+        current_hour = dt.now().hour
+        prompt = FOOD_MENTION_PROMPT.format(message=message, current_hour=current_hour)
         response = await client.aio.models.generate_content(
             model=MODEL,
             contents=prompt,
@@ -258,6 +261,7 @@ async def _extract_and_save_food(message: str):
 
         data = json.loads(raw)
         foods = data.get("foods", [])
+        meal_type = data.get("meal_type", "other")
 
         if foods:
             total_cal = sum(f.get("calories", 0) for f in foods)
@@ -266,6 +270,8 @@ async def _extract_and_save_food(message: str):
             total_fat = sum(f.get("fat", 0) for f in foods)
             names = ", ".join(f.get("name", "?") for f in foods)
 
+            meal_label = {"breakfast": "早餐", "lunch": "午餐", "dinner": "晚餐", "snack": "點心"}.get(meal_type, "")
+
             db.insert_meal(
                 photo_url=None,
                 food_items=foods,
@@ -273,13 +279,53 @@ async def _extract_and_save_food(message: str):
                 protein=total_pro,
                 carbs=total_carb,
                 fat=total_fat,
-                ai_response=f"💬 文字記錄：{names}",
+                ai_response=f"💬 {meal_label}：{names}",
                 source="text",
+                meal_type=meal_type or "other",
             )
-            logger.info("Saved text food mention: %s (%d kcal)", names, total_cal)
+            logger.info("Saved text food [%s]: %s (%d kcal)", meal_type, names, total_cal)
 
     except Exception:
         logger.debug("Food extraction skipped or failed", exc_info=True)
+
+
+async def _extract_and_save_workout(message: str):
+    """Background task: detect workout mentions and save to workouts table."""
+    try:
+        prompt = WORKOUT_MENTION_PROMPT.format(message=message)
+        response = await client.aio.models.generate_content(
+            model=MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.1,
+                max_output_tokens=512,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            ),
+        )
+
+        raw = (response.text or "").strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1]
+        if raw.endswith("```"):
+            raw = raw.rsplit("```", 1)[0]
+        raw = raw.strip()
+
+        data = json.loads(raw)
+        workout = data.get("workout")
+
+        if workout:
+            db.insert_workout(
+                workout_type=workout.get("workout_type", "未分類"),
+                exercises=workout.get("exercises", []),
+                duration_min=workout.get("duration_min"),
+                estimated_calories=workout.get("estimated_calories"),
+                notes=workout.get("notes"),
+            )
+            logger.info("Saved text workout: %s (%d exercises)",
+                       workout.get("workout_type"), len(workout.get("exercises", [])))
+
+    except Exception:
+        logger.debug("Workout extraction skipped or failed", exc_info=True)
 
 
 # --------------- Main Coach Functions ---------------
@@ -331,6 +377,7 @@ async def ask_coach(question: str) -> str:
     # Fire-and-forget background tasks
     asyncio.create_task(_extract_and_save_context(question))
     asyncio.create_task(_extract_and_save_food(question))
+    asyncio.create_task(_extract_and_save_workout(question))
 
     return reply
 

@@ -17,6 +17,7 @@ def insert_meal(
     fat: float,
     ai_response: str,
     source: str = "photo",
+    meal_type: str = "other",
 ) -> dict:
     return (
         supabase.table("meals")
@@ -29,6 +30,7 @@ def insert_meal(
             "fat": fat,
             "ai_response": ai_response,
             "source": source,
+            "meal_type": meal_type,
         })
         .execute()
         .data[0]
