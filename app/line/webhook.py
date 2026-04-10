@@ -34,6 +34,26 @@ def get_line_blob_api() -> AsyncMessagingApiBlob:
     return AsyncMessagingApiBlob(AsyncApiClient(config))
 
 
+def _split_message(text: str, max_len: int = 4500) -> list:
+    """Split a long message into chunks, breaking at newlines."""
+    if len(text) <= max_len:
+        return [text]
+
+    parts = []
+    while text:
+        if len(text) <= max_len:
+            parts.append(text)
+            break
+        # Find last newline before max_len
+        cut = text.rfind("\n", 0, max_len)
+        if cut == -1:
+            cut = max_len
+        parts.append(text[:cut])
+        text = text[cut:].lstrip("\n")
+
+    return parts
+
+
 async def _process_event(event: MessageEvent):
     """Process a LINE event in the background so webhook returns 200 quickly."""
     line_api = get_line_api()
@@ -51,24 +71,28 @@ async def _process_event(event: MessageEvent):
 
         logger.info("Got reply (%d chars), sending...", len(reply_text))
 
+        # Split long messages (LINE limit is 5000 chars per message)
+        messages = _split_message(reply_text, max_len=4500)
+
         # Try reply first (free), fall back to push if token expired
         try:
             await line_api.reply_message(
                 ReplyMessageRequest(
                     reply_token=event.reply_token,
-                    messages=[TextMessage(text=reply_text)],
+                    messages=[TextMessage(text=m) for m in messages[:5]],
                 )
             )
-            logger.info("Reply sent successfully")
+            logger.info("Reply sent successfully (%d parts)", len(messages))
         except Exception:
             logger.warning("Reply token expired, using push message")
-            await line_api.push_message(
-                PushMessageRequest(
-                    to=LINE_USER_ID,
-                    messages=[TextMessage(text=reply_text)],
+            for m in messages:
+                await line_api.push_message(
+                    PushMessageRequest(
+                        to=LINE_USER_ID,
+                        messages=[TextMessage(text=m)],
+                    )
                 )
-            )
-            logger.info("Push message sent successfully")
+            logger.info("Push message sent successfully (%d parts)", len(messages))
 
     except Exception:
         logger.exception("Error handling LINE event")
