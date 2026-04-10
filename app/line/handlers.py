@@ -91,6 +91,7 @@ async def _handle_food_image(image_bytes: bytes) -> str:
             carbs=result.get("total_carbs", 0),
             fat=result.get("total_fat", 0),
             ai_response=format_food_analysis(result),
+            source="photo",
         )
     except Exception:
         logger.exception("Failed to save meal to database")
@@ -159,6 +160,7 @@ async def _handle_nutrition_label_image(image_bytes: bytes) -> str:
             carbs=result.get("carbs", 0),
             fat=result.get("fat", 0),
             ai_response=format_nutrition_label(result),
+            source="nutrition_label",
         )
     except Exception:
         logger.exception("Failed to save nutrition label meal")
@@ -219,7 +221,7 @@ async def _handle_command(text: str) -> str:
 
 
 async def _today_summary() -> str:
-    """Generate a quick today summary."""
+    """Generate a quick today summary with source icons."""
     today = date.today()
     meals = db.get_meals_for_date(today)
     workouts = db.get_workouts_for_date(today)
@@ -231,9 +233,18 @@ async def _today_summary() -> str:
         total_pro = sum(m.get("protein", 0) for m in meals)
         total_carb = sum(m.get("carbs", 0) for m in meals)
         total_fat = sum(m.get("fat", 0) for m in meals)
-        lines.append(f"🍽 飲食（{len(meals)} 餐）")
-        lines.append(f"  熱量：{total_cal:.0f} kcal")
-        lines.append(f"  蛋白質：{total_pro:.0f}g ｜碳水：{total_carb:.0f}g ｜脂肪：{total_fat:.0f}g")
+        lines.append(f"🍽 飲食（{len(meals)} 筆）")
+
+        source_icon = {"photo": "📸", "nutrition_label": "🏷", "text": "💬"}
+        for m in meals:
+            icon = source_icon.get(m.get("source", "photo"), "📸")
+            foods = m.get("food_items", [])
+            name = ", ".join(f.get("name", "?") for f in foods) if foods else "?"
+            cal = m.get("total_calories", 0)
+            lines.append(f"  {icon} {name} {cal:.0f}kcal")
+
+        lines.append(f"\n📊 合計：{total_cal:.0f} kcal")
+        lines.append(f"  蛋白質 {total_pro:.0f}g / 碳水 {total_carb:.0f}g / 脂肪 {total_fat:.0f}g")
     else:
         lines.append("🍽 今天還沒記錄飲食")
 
@@ -244,15 +255,21 @@ async def _today_summary() -> str:
     else:
         lines.append("\n💪 今天還沒記錄訓練")
 
-    # Show goal progress if available
+    # Show goal progress
     goal = db.get_active_goal()
-    if goal and goal.get("daily_calorie_target") and meals:
-        target = goal["daily_calorie_target"]
-        remaining = target - total_cal
-        if remaining > 0:
-            lines.append(f"\n🎯 距離目標還可以吃 {remaining:.0f} kcal")
-        else:
-            lines.append(f"\n⚠️ 已超過目標 {abs(remaining):.0f} kcal")
+    if goal and meals:
+        if goal.get("daily_calorie_target"):
+            target = goal["daily_calorie_target"]
+            remaining = target - total_cal
+            if remaining > 0:
+                lines.append(f"\n🎯 還可以吃 {remaining:.0f} kcal")
+            else:
+                lines.append(f"\n⚠️ 已超過目標 {abs(remaining):.0f} kcal")
+        if goal.get("daily_protein_target"):
+            pro_target = goal["daily_protein_target"]
+            pro_remaining = pro_target - total_pro
+            if pro_remaining > 0:
+                lines.append(f"🥩 蛋白質還差 {pro_remaining:.0f}g")
 
     return "\n".join(lines)
 

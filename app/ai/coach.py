@@ -16,6 +16,7 @@ from app.ai.prompts import (
     COACH_QUERY_TEMPLATE,
     WORKOUT_PARSE_PROMPT,
     CONTEXT_EXTRACTION_PROMPT,
+    FOOD_MENTION_PROMPT,
 )
 from app.db import queries as db
 
@@ -234,6 +235,53 @@ async def _extract_and_save_context(message: str):
         logger.debug("Context extraction skipped or failed", exc_info=True)
 
 
+async def _extract_and_save_food(message: str):
+    """Background task: detect food mentions and save to meals table."""
+    try:
+        prompt = FOOD_MENTION_PROMPT.format(message=message)
+        response = await client.aio.models.generate_content(
+            model=MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.1,
+                max_output_tokens=512,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            ),
+        )
+
+        raw = (response.text or "").strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1]
+        if raw.endswith("```"):
+            raw = raw.rsplit("```", 1)[0]
+        raw = raw.strip()
+
+        data = json.loads(raw)
+        foods = data.get("foods", [])
+
+        if foods:
+            total_cal = sum(f.get("calories", 0) for f in foods)
+            total_pro = sum(f.get("protein", 0) for f in foods)
+            total_carb = sum(f.get("carbs", 0) for f in foods)
+            total_fat = sum(f.get("fat", 0) for f in foods)
+            names = ", ".join(f.get("name", "?") for f in foods)
+
+            db.insert_meal(
+                photo_url=None,
+                food_items=foods,
+                total_calories=total_cal,
+                protein=total_pro,
+                carbs=total_carb,
+                fat=total_fat,
+                ai_response=f"💬 文字記錄：{names}",
+                source="text",
+            )
+            logger.info("Saved text food mention: %s (%d kcal)", names, total_cal)
+
+    except Exception:
+        logger.debug("Food extraction skipped or failed", exc_info=True)
+
+
 # --------------- Main Coach Functions ---------------
 
 async def ask_coach(question: str) -> str:
@@ -280,8 +328,9 @@ async def ask_coach(question: str) -> str:
     except Exception:
         logger.exception("Failed to save assistant message")
 
-    # Fire-and-forget: extract context from user message
+    # Fire-and-forget background tasks
     asyncio.create_task(_extract_and_save_context(question))
+    asyncio.create_task(_extract_and_save_food(question))
 
     return reply
 
