@@ -8,7 +8,7 @@ from datetime import date
 from google import genai
 from google.genai import types
 
-from app.config import GEMINI_API_KEY
+from app.config import GEMINI_API_KEY, today_tw
 from app.ai.prompts import DAILY_SUMMARY_PROMPT
 from app.db import queries as db
 
@@ -21,7 +21,7 @@ MODEL = "gemini-2.5-flash"
 async def generate_daily_summary(target_date: date | None = None) -> str:
     """Generate a daily summary report for the given date."""
     if target_date is None:
-        target_date = date.today()
+        target_date = today_tw()
 
     # Gather data
     meals = db.get_meals_for_date(target_date)

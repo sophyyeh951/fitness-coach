@@ -19,6 +19,7 @@ from datetime import date
 
 from linebot.v3.messaging import AsyncMessagingApiBlob
 
+from app.config import today_tw
 from app.ai.image_analyzer import (
     classify_image,
     analyze_food_photo,
@@ -107,7 +108,7 @@ async def _handle_body_data_image(image_bytes: bytes) -> str:
         return format_body_data(result)
 
     # Build metrics dict for database
-    today = date.today()
+    today = today_tw()
     measurement_date = result.get("measurement_date") or today.isoformat()
 
     metrics = {"date": measurement_date}
@@ -222,7 +223,7 @@ async def _handle_command(text: str) -> str:
 
 async def _today_summary() -> str:
     """Generate today summary with meal categories, workouts, and calorie balance."""
-    today = date.today()
+    today = today_tw()
     meals = db.get_meals_for_date(today)
     workouts = db.get_workouts_for_date(today)
     metrics = db.get_body_metrics_range(today, today)

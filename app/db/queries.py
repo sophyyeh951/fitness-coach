@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Optional
 
+from app.config import today_tw
 from app.db.client import supabase
 
 
@@ -198,7 +199,7 @@ def get_active_context() -> list[dict]:
     ).eq(
         "is_active", True
     ).lt(
-        "expires_at", date.today().isoformat()
+        "expires_at", today_tw().isoformat()
     ).execute()
 
     return (
@@ -225,7 +226,7 @@ def insert_user_context(
     }
     if expires_in_days:
         from datetime import timedelta
-        row["expires_at"] = (date.today() + timedelta(days=expires_in_days)).isoformat()
+        row["expires_at"] = (today_tw() + timedelta(days=expires_in_days)).isoformat()
     return (
         supabase.table("user_context")
         .insert(row)
@@ -238,7 +239,7 @@ def insert_user_context(
 
 def get_recent_workouts(days: int = 30) -> list[dict]:
     from datetime import timedelta
-    start = (date.today() - timedelta(days=days)).isoformat()
+    start = (today_tw() - timedelta(days=days)).isoformat()
     return (
         supabase.table("workouts")
         .select("created_at,workout_type,exercises,notes")

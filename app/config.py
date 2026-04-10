@@ -1,7 +1,21 @@
 import os
+from datetime import date, datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Taiwan timezone (UTC+8)
+TW_TZ = timezone(timedelta(hours=8))
+
+
+def today_tw() -> date:
+    """Get today's date in Taiwan timezone."""
+    return datetime.now(TW_TZ).date()
+
+
+def now_tw() -> datetime:
+    """Get current datetime in Taiwan timezone."""
+    return datetime.now(TW_TZ)
 
 
 def _require(key: str) -> str:

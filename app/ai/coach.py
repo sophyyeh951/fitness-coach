@@ -10,7 +10,7 @@ from datetime import date, timedelta
 from google import genai
 from google.genai import types
 
-from app.config import GEMINI_API_KEY
+from app.config import GEMINI_API_KEY, today_tw
 from app.ai.prompts import (
     COACH_SYSTEM_PROMPT,
     COACH_QUERY_TEMPLATE,
@@ -40,7 +40,7 @@ def _build_profile_context() -> str:
     if profile.get("gender"):
         parts.append(f"性別：{gender_map.get(profile['gender'], profile['gender'])}")
     if profile.get("birth_year"):
-        age = date.today().year - profile["birth_year"]
+        age = today_tw().year - profile["birth_year"]
         parts.append(f"年齡：{age} 歲（{profile['birth_year']}年生）")
     if profile.get("height_cm"):
         parts.append(f"身高：{profile['height_cm']}cm")
@@ -126,7 +126,7 @@ def _build_recent_workouts() -> str:
 
 def _build_user_context() -> str:
     """Gather recent user data (today's meals, workouts, metrics, goal)."""
-    today = date.today()
+    today = today_tw()
     parts = []
 
     # Today's meals

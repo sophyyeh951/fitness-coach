@@ -61,7 +61,8 @@ async def health_debug():
     """Debug endpoint to check what data exists in body_metrics."""
     try:
         from datetime import timedelta
-        today = date.today()
+        from app.config import today_tw
+        today = today_tw()
         metrics = db.get_body_metrics_range(today - timedelta(days=7), today)
         return {"status": "ok", "recent_metrics": metrics}
     except Exception as e:
