@@ -221,9 +221,7 @@ async def _handle_command(text: str) -> str:
 
 
 async def _today_summary() -> str:
-    """Generate today summary with meal categories and calorie burn."""
-    from datetime import timedelta
-
+    """Generate today summary with meal categories, workouts, and calorie balance."""
     today = date.today()
     meals = db.get_meals_for_date(today)
     workouts = db.get_workouts_for_date(today)
@@ -231,7 +229,7 @@ async def _today_summary() -> str:
 
     lines = [f"📋 {today.strftime('%Y/%m/%d')} 今日摘要\n"]
 
-    # --- Meals by category ---
+    # --- Meals by category with P/C/F per meal ---
     if meals:
         total_cal = sum(m.get("total_calories", 0) for m in meals)
         total_pro = sum(m.get("protein", 0) for m in meals)
@@ -245,7 +243,6 @@ async def _today_summary() -> str:
             "snack": "🍪 點心",
             "other": "🍽 其他",
         }
-        source_icon = {"photo": "📸", "nutrition_label": "🏷", "text": "💬"}
 
         # Group by meal_type
         grouped = {}
@@ -253,19 +250,24 @@ async def _today_summary() -> str:
             mt = m.get("meal_type", "other") or "other"
             grouped.setdefault(mt, []).append(m)
 
-        # Display in order
         for mt_key in ["breakfast", "lunch", "dinner", "snack", "other"]:
             if mt_key not in grouped:
                 continue
             label = meal_type_label.get(mt_key, "🍽")
             mt_meals = grouped[mt_key]
             mt_cal = sum(m.get("total_calories", 0) for m in mt_meals)
-            lines.append(f"{label} ({mt_cal:.0f}kcal)")
+            mt_pro = sum(m.get("protein", 0) for m in mt_meals)
+            mt_carb = sum(m.get("carbs", 0) for m in mt_meals)
+            mt_fat = sum(m.get("fat", 0) for m in mt_meals)
+            # Food names
+            all_foods = []
             for m in mt_meals:
-                icon = source_icon.get(m.get("source", "photo"), "📸")
                 foods = m.get("food_items", [])
-                name = ", ".join(f.get("name", "?") for f in foods) if foods else "?"
-                lines.append(f"  {icon} {name}")
+                all_foods.extend(f.get("name", "?") for f in foods)
+            food_str = ", ".join(all_foods) if all_foods else "?"
+            lines.append(f"{label} {mt_cal:.0f}kcal")
+            lines.append(f"  {food_str}")
+            lines.append(f"  P {mt_pro:.0f}g / C {mt_carb:.0f}g / F {mt_fat:.0f}g")
 
         lines.append(f"\n📊 攝取合計：{total_cal:.0f} kcal")
         lines.append(f"  P {total_pro:.0f}g / C {total_carb:.0f}g / F {total_fat:.0f}g")
@@ -274,54 +276,62 @@ async def _today_summary() -> str:
         total_pro = 0
         lines.append("🍽 今天還沒記錄飲食")
 
-    # --- Workouts ---
+    # --- Workouts: list all exercises ---
     if workouts:
-        lines.append(f"\n💪 訓練（{len(workouts)} 次）")
         for w in workouts:
             wtype = w.get("workout_type", "未分類")
             exercises = w.get("exercises", [])
-            ex_summary = ", ".join(e.get("name", "?") for e in exercises[:3]) if exercises else ""
             cal = w.get("estimated_calories")
             cal_str = f" ~{cal:.0f}kcal" if cal else ""
-            lines.append(f"  • {wtype}{cal_str}")
-            if ex_summary:
-                lines.append(f"    {ex_summary}")
+            lines.append(f"\n💪 {wtype}{cal_str}")
+            for ex in exercises:
+                lines.append(f"  • {ex.get('name', '?')}")
             notes = w.get("notes")
             if notes:
-                lines.append(f"    💭 {notes[:60]}")
+                lines.append(f"  💭 {notes[:80]}")
     else:
         lines.append("\n💪 今天還沒記錄訓練")
 
-    # --- Calorie burn (from body_metrics) ---
+    # --- Total calorie burn (BMR + active) ---
+    bmr = 1250  # user's estimated BMR from PICOOC
+    active_cal = 0
     if metrics:
         m = metrics[-1]
-        active_cal = m.get("active_calories")
-        steps = m.get("steps")
-        burn_parts = []
-        if active_cal:
-            burn_parts.append(f"活動消耗 {active_cal:.0f}kcal")
-        if steps:
-            burn_parts.append(f"步數 {steps}")
-        if burn_parts:
-            lines.append(f"\n🔥 {' / '.join(burn_parts)}")
+        active_cal = m.get("active_calories") or 0
 
-    # --- Goal progress ---
+    total_burn = bmr + active_cal
+    lines.append(f"\n🔥 預估總消耗：{total_burn:.0f} kcal")
+    lines.append(f"  基礎代謝 {bmr} + 活動消耗 {active_cal:.0f}")
+
+    # --- Calorie balance ---
+    if total_cal > 0:
+        balance = total_cal - total_burn
+        if balance < 0:
+            lines.append(f"  → 赤字 {abs(balance):.0f} kcal ✅")
+        else:
+            lines.append(f"  → 盈餘 {balance:.0f} kcal")
+
+    # --- Goal: only show if significantly over/under ---
     goal = db.get_active_goal()
     if goal and total_cal > 0:
-        if goal.get("daily_calorie_target"):
-            target = goal["daily_calorie_target"]
-            remaining = target - total_cal
-            if remaining > 0:
-                lines.append(f"\n🎯 還可以吃 {remaining:.0f} kcal")
-            else:
-                lines.append(f"\n⚠️ 已超過目標 {abs(remaining):.0f} kcal")
-        if goal.get("daily_protein_target"):
-            pro_target = goal["daily_protein_target"]
-            pro_remaining = pro_target - total_pro
-            if pro_remaining > 0:
-                lines.append(f"🥩 蛋白質還差 {pro_remaining:.0f}g")
-            else:
-                lines.append(f"🥩 蛋白質達標！")
+        cal_target = goal.get("daily_calorie_target")
+        pro_target = goal.get("daily_protein_target")
+        warnings = []
+
+        if cal_target:
+            diff = total_cal - cal_target
+            # Only warn if >10% over target
+            if diff > cal_target * 0.1:
+                warnings.append(f"⚠️ 超過熱量目標 {diff:.0f} kcal")
+
+        if pro_target:
+            pro_diff = pro_target - total_pro
+            # Only warn if >10% under target
+            if pro_diff > pro_target * 0.1:
+                warnings.append(f"🥩 蛋白質還差 {pro_diff:.0f}g")
+
+        if warnings:
+            lines.append("\n" + "\n".join(warnings))
 
     return "\n".join(lines)
 
