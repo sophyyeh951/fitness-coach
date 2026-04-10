@@ -318,9 +318,11 @@ async def _today_summary() -> str:
         lines.append(f"\n🔥 總消耗：{total_burn:.0f} kcal（實際）")
         lines.append(f"  基底 {base_tdee} + 活動 {active_cal:.0f}")
     else:
-        # Stage 1: estimate based on workout type
+        # Stage 1: estimate based on workout type or today's plan
         exercise_estimate = 0
         exercise_label = "休息日"
+
+        # First check completed workouts
         if workouts:
             workout_types = [w.get("workout_type", "").lower() for w in workouts]
             all_types = " ".join(workout_types)
@@ -330,6 +332,21 @@ async def _today_summary() -> str:
             else:
                 exercise_estimate = 300
                 exercise_label = "重訓日"
+        else:
+            # No workout recorded yet — check context notes and recent chat for plans
+            context_notes = db.get_active_context()
+            recent_chat = db.get_recent_chat(limit=10)
+            plan_text = " ".join(
+                [n.get("content", "") for n in context_notes]
+                + [c.get("message", "") for c in recent_chat if c.get("role") == "user"]
+            ).lower()
+
+            if any(k in plan_text for k in ["羽球", "有氧", "跑步", "游泳", "打球"]):
+                exercise_estimate = 550
+                exercise_label = "羽球/有氧日（預估）"
+            elif any(k in plan_text for k in ["重訓", "練上半身", "練臀腿", "練腿", "上半身日", "臀腿日"]):
+                exercise_estimate = 300
+                exercise_label = "重訓日（預估）"
 
         total_burn = base_tdee + exercise_estimate
         lines.append(f"\n🔥 預估總消耗：{total_burn:.0f} kcal")
