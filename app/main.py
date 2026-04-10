@@ -4,9 +4,11 @@ import httpx
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 from app.line.webhook import router as line_router
 from app.health.apple_health import router as health_router
+from app.config import TW_TZ
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -14,17 +16,39 @@ logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
 
 
-async def _daily_push_job():
-    """Nightly job: generate and push daily summary via LINE."""
+async def _morning_checkin():
+    """Morning check-in: ask what's today's plan to enable Stage 1 calorie estimate."""
+    try:
+        from app.line.push import push_text
+        from app.config import today_tw
+
+        today = today_tw()
+        weekday_map = ["一", "二", "三", "四", "五", "六", "日"]
+        weekday = weekday_map[today.weekday()]
+
+        msg = (
+            f"早安！今天星期{weekday} 🌅\n\n"
+            f"今天是什麼運動日呢？\n"
+            f"（羽球 / 重訓上半身 / 重訓臀腿 / 休息日）\n\n"
+            f"告訴我之後，我就可以幫你預估今天的熱量消耗，方便安排飲食喔！"
+        )
+        push_text(msg)
+        logger.info("Morning check-in sent")
+    except Exception:
+        logger.exception("Failed to send morning check-in")
+
+
+async def _evening_summary():
+    """Evening job: generate and push daily summary via LINE."""
     try:
         from app.reports.daily import generate_daily_summary
         from app.line.push import push_text
 
         summary = await generate_daily_summary()
         push_text(summary)
-        logger.info("Daily summary pushed successfully")
+        logger.info("Evening summary pushed successfully")
     except Exception:
-        logger.exception("Failed to push daily summary")
+        logger.exception("Failed to push evening summary")
 
 
 async def _keep_alive():
@@ -42,10 +66,19 @@ async def _keep_alive():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    scheduler.add_job(_daily_push_job, "cron", hour=21, minute=30)
+    # Morning check-in at 8:00 Taiwan time
+    scheduler.add_job(
+        _morning_checkin,
+        CronTrigger(hour=8, minute=0, timezone=TW_TZ),
+    )
+    # Evening summary at 21:30 Taiwan time
+    scheduler.add_job(
+        _evening_summary,
+        CronTrigger(hour=21, minute=30, timezone=TW_TZ),
+    )
     scheduler.add_job(_keep_alive, "interval", minutes=10)
     scheduler.start()
-    logger.info("Scheduler started — daily summary at 21:30, keep-alive every 10min")
+    logger.info("Scheduler started — morning 8:00 + evening 21:30 (Taiwan time)")
     yield
     scheduler.shutdown()
 
@@ -59,15 +92,3 @@ app.include_router(health_router, prefix="/api")
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
-
-
-@app.get("/test-coach")
-async def test_coach():
-    """Debug: test the full AI coach flow on the server."""
-    try:
-        from app.ai.coach import ask_coach
-        reply = await ask_coach("測試：今天練什麼好？")
-        return {"status": "ok", "reply": reply}
-    except Exception as e:
-        import traceback
-        return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
