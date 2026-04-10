@@ -6,16 +6,28 @@ Text messages:
   - Starts with "/" → command (e.g. /目標, /今日, /週報)
   - Otherwise → Q&A with AI coach
 
-Image messages → food photo analysis
+Image messages:
+  - Food photo → nutritional analysis
+  - Body data screenshot (PICOOC, Apple Watch) → record body metrics
+  - Nutrition label → record nutritional info
 """
 
 from __future__ import annotations
 
 import logging
+from datetime import date
 
 from linebot.v3.messaging import AsyncMessagingApiBlob
 
-from app.ai.food_analyzer import analyze_food_photo, format_food_analysis
+from app.ai.image_analyzer import (
+    classify_image,
+    analyze_food_photo,
+    analyze_body_data,
+    analyze_nutrition_label,
+    format_food_analysis,
+    format_body_data,
+    format_nutrition_label,
+)
 from app.ai.coach import ask_coach, parse_workout
 from app.db import queries as db
 
@@ -45,18 +57,34 @@ async def handle_image_message(
     message_id: str,
     blob_api: AsyncMessagingApiBlob,
 ) -> str:
-    """Handle incoming image messages — analyze food photo."""
-    # Download image from LINE using blob API
+    """Handle incoming image messages — classify and route."""
+    # Download image from LINE
     response = await blob_api.get_message_content(message_id)
     image_bytes = response
 
-    # Analyze with Gemini Vision
+    # Step 1: Classify the image
+    img_type = await classify_image(image_bytes)
+    logger.info("Image classified as: %s", img_type)
+
+    # Step 2: Route to appropriate handler
+    if img_type == "food":
+        return await _handle_food_image(image_bytes)
+    elif img_type == "body_data":
+        return await _handle_body_data_image(image_bytes)
+    elif img_type == "nutrition_label":
+        return await _handle_nutrition_label_image(image_bytes)
+    else:
+        # Unknown — try food analysis as default
+        return await _handle_food_image(image_bytes)
+
+
+async def _handle_food_image(image_bytes: bytes) -> str:
+    """Analyze food photo and save to meals."""
     result = await analyze_food_photo(image_bytes)
 
-    # Save to database
     try:
         db.insert_meal(
-            photo_url=None,  # Could store in Supabase Storage later
+            photo_url=None,
             food_items=result.get("foods", []),
             total_calories=result.get("total_calories", 0),
             protein=result.get("total_protein", 0),
@@ -68,6 +96,74 @@ async def handle_image_message(
         logger.exception("Failed to save meal to database")
 
     return format_food_analysis(result)
+
+
+async def _handle_body_data_image(image_bytes: bytes) -> str:
+    """Extract body metrics from screenshot and save."""
+    result = await analyze_body_data(image_bytes)
+
+    if "error" in result:
+        return format_body_data(result)
+
+    # Build metrics dict for database
+    today = date.today()
+    measurement_date = result.get("measurement_date") or today.isoformat()
+
+    metrics = {"date": measurement_date}
+    if result.get("weight") is not None:
+        metrics["weight"] = result["weight"]
+    if result.get("body_fat_pct") is not None:
+        metrics["body_fat_pct"] = result["body_fat_pct"]
+    if result.get("muscle_pct") is not None:
+        metrics["muscle_mass"] = result["muscle_pct"]  # store as muscle_mass field
+    if result.get("bmi") is not None:
+        metrics["bmi"] = result["bmi"]
+    if result.get("steps") is not None:
+        metrics["steps"] = result["steps"]
+    if result.get("active_calories") is not None:
+        metrics["active_calories"] = result["active_calories"]
+    if result.get("resting_heart_rate") is not None:
+        metrics["resting_heart_rate"] = result["resting_heart_rate"]
+
+    try:
+        db.upsert_body_metrics(metrics)
+        logger.info("Saved body metrics from image: %s", metrics)
+    except Exception:
+        logger.exception("Failed to save body metrics")
+
+    return format_body_data(result)
+
+
+async def _handle_nutrition_label_image(image_bytes: bytes) -> str:
+    """Extract nutrition info from label and save as meal."""
+    result = await analyze_nutrition_label(image_bytes)
+
+    if "error" in result:
+        return format_nutrition_label(result)
+
+    # Save as a meal record
+    product_name = result.get("product_name") or "營養標示食品"
+    try:
+        db.insert_meal(
+            photo_url=None,
+            food_items=[{
+                "name": product_name,
+                "portion": result.get("serving_size", "一份"),
+                "calories": result.get("calories", 0),
+                "protein": result.get("protein", 0),
+                "carbs": result.get("carbs", 0),
+                "fat": result.get("fat", 0),
+            }],
+            total_calories=result.get("calories", 0),
+            protein=result.get("protein", 0),
+            carbs=result.get("carbs", 0),
+            fat=result.get("fat", 0),
+            ai_response=format_nutrition_label(result),
+        )
+    except Exception:
+        logger.exception("Failed to save nutrition label meal")
+
+    return format_nutrition_label(result)
 
 
 async def _handle_workout(text: str) -> str:
@@ -118,14 +214,12 @@ async def _handle_command(text: str) -> str:
         "可用指令：\n"
         "/今日 — 查看今日飲食和訓練摘要\n"
         "/目標 — 查看目前的健身目標\n"
-        "\n直接打字問問題，或傳食物照片記錄飲食！"
+        "\n直接打字問問題，或傳食物照片/營養標示/體脂計截圖！"
     )
 
 
 async def _today_summary() -> str:
     """Generate a quick today summary."""
-    from datetime import date
-
     today = date.today()
     meals = db.get_meals_for_date(today)
     workouts = db.get_workouts_for_date(today)
