@@ -7,6 +7,38 @@ from app.config import today_tw
 from app.db.client import supabase
 
 
+# --- Data Modification ---
+
+def delete_meal(meal_id: int) -> bool:
+    result = supabase.table("meals").delete().eq("id", meal_id).execute()
+    return len(result.data) > 0
+
+
+def update_meal(meal_id: int, updates: dict) -> dict:
+    return (
+        supabase.table("meals")
+        .update(updates)
+        .eq("id", meal_id)
+        .execute()
+        .data[0]
+    )
+
+
+def delete_workout(workout_id: int) -> bool:
+    result = supabase.table("workouts").delete().eq("id", workout_id).execute()
+    return len(result.data) > 0
+
+
+def update_workout(workout_id: int, updates: dict) -> dict:
+    return (
+        supabase.table("workouts")
+        .update(updates)
+        .eq("id", workout_id)
+        .execute()
+        .data[0]
+    )
+
+
 # --- Meals ---
 
 def insert_meal(

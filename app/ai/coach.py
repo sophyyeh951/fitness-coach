@@ -342,6 +342,49 @@ async def _extract_and_save_workout(message: str):
         logger.debug("Workout extraction skipped or failed", exc_info=True)
 
 
+# --------------- Data Modification ---------------
+
+def _execute_data_commands(reply: str) -> str:
+    """Parse and execute data modification commands embedded in AI reply."""
+    import re
+
+    # DELETE_MEAL:ID
+    for match in re.finditer(r'\[DELETE_MEAL:(\d+)\]', reply):
+        meal_id = int(match.group(1))
+        try:
+            db.delete_meal(meal_id)
+            logger.info("Deleted meal ID %d", meal_id)
+        except Exception:
+            logger.exception("Failed to delete meal %d", meal_id)
+    reply = re.sub(r'\[DELETE_MEAL:\d+\]', '', reply)
+
+    # DELETE_WORKOUT:ID
+    for match in re.finditer(r'\[DELETE_WORKOUT:(\d+)\]', reply):
+        workout_id = int(match.group(1))
+        try:
+            db.delete_workout(workout_id)
+            logger.info("Deleted workout ID %d", workout_id)
+        except Exception:
+            logger.exception("Failed to delete workout %d", workout_id)
+    reply = re.sub(r'\[DELETE_WORKOUT:\d+\]', '', reply)
+
+    # UPDATE_MEAL:ID:field=value
+    for match in re.finditer(r'\[UPDATE_MEAL:(\d+):(\w+)=(\w+)\]', reply):
+        meal_id = int(match.group(1))
+        field = match.group(2)
+        value = match.group(3)
+        allowed_fields = {"meal_type", "source"}
+        if field in allowed_fields:
+            try:
+                db.update_meal(meal_id, {field: value})
+                logger.info("Updated meal %d: %s=%s", meal_id, field, value)
+            except Exception:
+                logger.exception("Failed to update meal %d", meal_id)
+    reply = re.sub(r'\[UPDATE_MEAL:\d+:\w+=\w+\]', '', reply)
+
+    return reply.strip()
+
+
 # --------------- Main Coach Functions ---------------
 
 async def ask_coach(question: str) -> str:
@@ -381,6 +424,9 @@ async def ask_coach(question: str) -> str:
 
     text = response.text
     reply = text.strip() if text else "抱歉，我現在沒有回應，請再問一次 🙏"
+
+    # Execute any data modification commands in the reply
+    reply = _execute_data_commands(reply)
 
     # Save assistant reply
     try:

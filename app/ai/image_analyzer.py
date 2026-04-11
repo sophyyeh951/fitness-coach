@@ -34,28 +34,35 @@ IMAGE_CLASSIFY_PROMPT = """\
 
 FOOD_ANALYSIS_PROMPT = """\
 你是一位專業的營養師。請分析這張食物照片，辨識所有食物並估算營養素。
+目前時間：{current_hour} 點。
 
 請用以下 JSON 格式回覆（不要加 markdown code block）：
-{
+{{
   "foods": [
-    {
+    {{
       "name": "食物名稱",
       "portion": "份量描述（如：一碗、一片、約200g）",
       "calories": 數字,
       "protein": 數字（克）,
       "carbs": 數字（克）,
       "fat": 數字（克）
-    }
+    }}
   ],
   "total_calories": 總熱量數字,
   "total_protein": 總蛋白質數字,
   "total_carbs": 總碳水數字,
   "total_fat": 總脂肪數字,
-  "brief_comment": "一句簡短的營養評語"
-}
+  "brief_comment": "一句簡短的營養評語",
+  "meal_type": "根據時間或照片上的文字標注判斷：breakfast/lunch/dinner/snack"
+}}
+
+meal_type 判斷：
+- 如果照片上有手寫文字標注（如「午餐」「晚餐」「早餐」），以標注為準
+- 否則根據時間：5-10點 breakfast、11-14點 lunch、17-21點 dinner、其他 snack
 
 注意：
 - 盡量根據照片中食物的份量來估算
+- 如果照片上有手寫的份量標注（如「2份」「300ml」），要參考
 - 回覆純 JSON，不要其他文字
 """
 
@@ -172,7 +179,11 @@ async def classify_image(image_bytes: bytes) -> str:
 
 async def analyze_food_photo(image_bytes: bytes) -> dict:
     """Analyze a food photo and return nutritional estimates."""
-    raw = await _gemini_vision(FOOD_ANALYSIS_PROMPT, image_bytes)
+    from datetime import datetime
+    from app.config import TW_TZ
+    current_hour = datetime.now(TW_TZ).hour
+    prompt = FOOD_ANALYSIS_PROMPT.format(current_hour=current_hour)
+    raw = await _gemini_vision(prompt, image_bytes)
     try:
         return _parse_json_response(raw)
     except json.JSONDecodeError:

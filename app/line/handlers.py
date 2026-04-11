@@ -82,6 +82,7 @@ async def handle_image_message(
 async def _handle_food_image(image_bytes: bytes) -> str:
     """Analyze food photo and save to meals."""
     result = await analyze_food_photo(image_bytes)
+    meal_type = result.get("meal_type", "other") or "other"
 
     try:
         db.insert_meal(
@@ -93,6 +94,7 @@ async def _handle_food_image(image_bytes: bytes) -> str:
             fat=result.get("total_fat", 0),
             ai_response=format_food_analysis(result),
             source="photo",
+            meal_type=meal_type,
         )
     except Exception:
         logger.exception("Failed to save meal to database")
@@ -267,14 +269,12 @@ async def _today_summary() -> str:
             mt_pro = sum(m.get("protein", 0) for m in mt_meals)
             mt_carb = sum(m.get("carbs", 0) for m in mt_meals)
             mt_fat = sum(m.get("fat", 0) for m in mt_meals)
-            # Food names
-            all_foods = []
+            # Food names with IDs for modification
+            lines.append(f"{label} {mt_cal:.0f}kcal")
             for m in mt_meals:
                 foods = m.get("food_items", [])
-                all_foods.extend(f.get("name", "?") for f in foods)
-            food_str = ", ".join(all_foods) if all_foods else "?"
-            lines.append(f"{label} {mt_cal:.0f}kcal")
-            lines.append(f"  {food_str}")
+                food_names = ", ".join(f.get("name", "?") for f in foods) if foods else "?"
+                lines.append(f"  #{m['id']} {food_names}")
             lines.append(f"  P {mt_pro:.0f}g / C {mt_carb:.0f}g / F {mt_fat:.0f}g")
 
         lines.append(f"\n📊 攝取合計：{total_cal:.0f} kcal")
@@ -291,7 +291,7 @@ async def _today_summary() -> str:
             exercises = w.get("exercises", [])
             cal = w.get("estimated_calories")
             cal_str = f" ~{cal:.0f}kcal" if cal else ""
-            lines.append(f"\n💪 {wtype}{cal_str}")
+            lines.append(f"\n💪 #{w['id']} {wtype}{cal_str}")
             for ex in exercises:
                 lines.append(f"  • {ex.get('name', '?')}")
             notes = w.get("notes")
@@ -360,19 +360,9 @@ async def _today_summary() -> str:
         else:
             lines.append(f"  → 盈餘 {balance:.0f} kcal")
 
-    # --- Goal warnings: only when clearly off track ---
-    goal = db.get_active_goal()
-    if goal and total_cal > 0:
-        cal_target = goal.get("daily_calorie_target")
-        warnings = []
-
-        if cal_target:
-            diff = total_cal - cal_target
-            if diff > cal_target * 0.1:
-                warnings.append(f"⚠️ 超過熱量目標 {diff:.0f} kcal")
-
-        # Protein: range is 1.6-2.2x body weight (86-118g)
-        # Only warn if below lower bound (86g)
+    # --- Protein warning: only when below lower bound ---
+    warnings = []
+    if total_cal > 0:
         protein_lower = 86
         if total_pro < protein_lower:
             warnings.append(f"🥩 蛋白質偏低（{total_pro:.0f}g），建議至少 {protein_lower}g")
