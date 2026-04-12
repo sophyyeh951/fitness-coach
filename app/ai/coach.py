@@ -129,7 +129,7 @@ def _build_user_context() -> str:
     today = today_tw()
     parts = []
 
-    # Today's meals
+    # Today's meals (with details for modification reference)
     meals = db.get_meals_for_date(today)
     if meals:
         total_cal = sum(m.get("total_calories", 0) for m in meals)
@@ -138,9 +138,13 @@ def _build_user_context() -> str:
         total_fat = sum(m.get("fat", 0) for m in meals)
         parts.append(
             f"今日飲食：{len(meals)} 餐，"
-            f"共 {total_cal:.0f} kcal（蛋白 {total_pro:.0f}g / "
-            f"碳水 {total_carb:.0f}g / 脂肪 {total_fat:.0f}g）"
+            f"共 {total_cal:.0f} kcal（P {total_pro:.0f}g / C {total_carb:.0f}g / F {total_fat:.0f}g）"
         )
+        for m in meals:
+            foods = m.get("food_items", [])
+            names = ", ".join(f.get("name", "?") for f in foods) if foods else "?"
+            mt = m.get("meal_type", "other")
+            parts.append(f"  #{m['id']}({mt}) {names} {m.get('total_calories', 0):.0f}kcal")
 
     # Today's workouts
     workouts = db.get_workouts_for_date(today)
@@ -381,6 +385,29 @@ def _execute_data_commands(reply: str) -> str:
             except Exception:
                 logger.exception("Failed to update meal %d", meal_id)
     reply = re.sub(r'\[UPDATE_MEAL:\d+:\w+=\w+\]', '', reply)
+
+    # REPLACE_MEAL_FOODS:ID with JSON block
+    for match in re.finditer(
+        r'\[REPLACE_MEAL_FOODS:(\d+)\]\s*(\{.*?\})\s*\[/REPLACE_MEAL_FOODS\]',
+        reply, re.DOTALL
+    ):
+        meal_id = int(match.group(1))
+        try:
+            data = json.loads(match.group(2))
+            db.update_meal(meal_id, {
+                "food_items": data.get("foods", []),
+                "total_calories": data.get("total_calories", 0),
+                "protein": data.get("total_protein", 0),
+                "carbs": data.get("total_carbs", 0),
+                "fat": data.get("total_fat", 0),
+            })
+            logger.info("Replaced foods in meal %d", meal_id)
+        except Exception:
+            logger.exception("Failed to replace foods in meal %d", meal_id)
+    reply = re.sub(
+        r'\[REPLACE_MEAL_FOODS:\d+\]\s*\{.*?\}\s*\[/REPLACE_MEAL_FOODS\]',
+        '', reply, flags=re.DOTALL
+    )
 
     return reply.strip()
 
