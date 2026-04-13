@@ -259,7 +259,21 @@ async def _extract_and_save_food(message: str):
     try:
         from datetime import datetime as dt
         current_hour = dt.now().hour
-        prompt = FOOD_MENTION_PROMPT.format(message=message, current_hour=current_hour)
+
+        # Build recent foods list for duplicate detection
+        today = today_tw()
+        today_meals = db.get_meals_for_date(today)
+        recent_foods = ", ".join(
+            f.get("name", "?")
+            for m in today_meals
+            for f in m.get("food_items", [])
+        ) if today_meals else "（今天還沒有記錄）"
+
+        prompt = FOOD_MENTION_PROMPT.format(
+            message=message,
+            current_hour=current_hour,
+            recent_foods=recent_foods,
+        )
         response = await client.aio.models.generate_content(
             model=MODEL,
             contents=prompt,
