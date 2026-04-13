@@ -341,7 +341,11 @@ async def _today_summary() -> str:
                 + [c.get("message", "") for c in recent_chat if c.get("role") == "user"]
             ).lower()
 
-            if any(k in plan_text for k in ["羽球", "有氧", "跑步", "游泳", "打球"]):
+            # Check for rest day FIRST (overrides other plans)
+            if any(k in plan_text for k in ["休息日", "休息", "不運動", "沒有能量"]):
+                exercise_estimate = 0
+                exercise_label = "休息日"
+            elif any(k in plan_text for k in ["羽球", "有氧", "跑步", "游泳", "打球"]):
                 exercise_estimate = 550
                 exercise_label = "羽球/有氧日（預估）"
             elif any(k in plan_text for k in ["重訓", "練上半身", "練臀腿", "練腿", "上半身日", "臀腿日"]):
