@@ -179,8 +179,14 @@ async def handle_image_message(
     response = await blob_api.get_message_content(message_id)
     image_bytes = response
 
-    # Check for active /吃 session
+    # Check for active session
     session = get_session(user_id)
+
+    # Check for body photo session
+    if session and session["mode"] == "awaiting_body_photo":
+        from app.line.commands.body import handle_body_photo
+        return await handle_body_photo(image_bytes, user_id)
+
     in_meal_flow = session and session["mode"] == "awaiting_food"
 
     if in_meal_flow:
