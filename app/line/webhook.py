@@ -56,43 +56,51 @@ def _split_message(text: str, max_len: int = 4500) -> list:
 
 async def _process_event(event: MessageEvent):
     """Process a LINE event in the background so webhook returns 200 quickly."""
+    from linebot.v3.messaging import Message as LineMessage
+
     line_api = get_line_api()
 
     try:
         if isinstance(event.message, TextMessageContent):
             logger.info("Processing text: %s", event.message.text[:50])
-            reply_text = await handle_text_message(event.message.text)
+            user_id = event.source.user_id if hasattr(event.source, "user_id") else LINE_USER_ID
+            result = await handle_text_message(event.message.text, user_id)
         elif isinstance(event.message, ImageMessageContent):
             logger.info("Processing image: %s", event.message.id)
+            user_id = event.source.user_id if hasattr(event.source, "user_id") else LINE_USER_ID
             blob_api = get_line_blob_api()
-            reply_text = await handle_image_message(event.message.id, blob_api)
+            result = await handle_image_message(event.message.id, blob_api, user_id)
         else:
-            reply_text = "目前支援文字和圖片訊息喔！"
+            result = "目前支援文字和圖片訊息喔！"
 
-        logger.info("Got reply (%d chars), sending...", len(reply_text))
+        result_preview = result.text[:50] if hasattr(result, 'text') else str(result)[:50]
+        logger.info("Got reply: %s..., sending...", result_preview)
 
-        # Split long messages (LINE limit is 5000 chars per message)
-        messages = _split_message(reply_text, max_len=4500)
+        if isinstance(result, LineMessage):
+            reply_messages = [result]
+        else:
+            parts = _split_message(result, max_len=4500)
+            reply_messages = [TextMessage(text=p) for p in parts[:5]]
 
         # Try reply first (free), fall back to push if token expired
         try:
             await line_api.reply_message(
                 ReplyMessageRequest(
                     reply_token=event.reply_token,
-                    messages=[TextMessage(text=m) for m in messages[:5]],
+                    messages=reply_messages,
                 )
             )
-            logger.info("Reply sent successfully (%d parts)", len(messages))
+            logger.info("Reply sent successfully (%d parts)", len(reply_messages))
         except Exception:
             logger.warning("Reply token expired, using push message")
-            for m in messages:
+            for msg in reply_messages:
                 await line_api.push_message(
                     PushMessageRequest(
                         to=LINE_USER_ID,
-                        messages=[TextMessage(text=m)],
+                        messages=[msg],
                     )
                 )
-            logger.info("Push message sent successfully (%d parts)", len(messages))
+            logger.info("Push message sent successfully (%d parts)", len(reply_messages))
 
     except Exception:
         logger.exception("Error handling LINE event")

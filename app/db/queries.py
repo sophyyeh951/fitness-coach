@@ -283,6 +283,19 @@ def get_recent_workouts(days: int = 30) -> list[dict]:
     )[::-1]  # chronological
 
 
+def get_workouts_by_type(workout_type_keyword: str, limit: int = 3) -> list[dict]:
+    """Return the most recent workouts matching a type keyword (case-insensitive partial match)."""
+    result = (
+        supabase.table("workouts")
+        .select("*")
+        .ilike("workout_type", f"%{workout_type_keyword}%")
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return result.data or []
+
+
 def set_goal(
     goal_type: str,
     target_weight: float | None = None,

@@ -14,6 +14,7 @@ from app.config import GEMINI_API_KEY, today_tw
 from app.ai.prompts import (
     COACH_SYSTEM_PROMPT,
     COACH_QUERY_TEMPLATE,
+    QA_ONLY_QUERY_TEMPLATE,
     WORKOUT_PARSE_PROMPT,
     CONTEXT_EXTRACTION_PROMPT,
     FOOD_MENTION_PROMPT,
@@ -479,6 +480,58 @@ async def ask_coach(question: str) -> str:
     asyncio.create_task(_extract_and_save_context(question))
     asyncio.create_task(_extract_and_save_food(question))
     asyncio.create_task(_extract_and_save_workout(question))
+
+    return reply
+
+
+async def ask_coach_qa_only(question: str) -> str:
+    """Q&A only mode — answers questions but NEVER logs food/workout data.
+
+    This is the default handler for all free-text messages (no command prefix).
+    The prompt explicitly forbids the model from triggering any logging.
+    """
+    try:
+        db.save_chat_message("user", question)
+    except Exception:
+        logger.exception("Failed to save user message")
+
+    user_profile = _build_profile_context()
+    active_context = _build_active_context()
+    recent_workouts = _build_recent_workouts()
+    user_data = _build_user_context()
+    chat_history = _build_chat_history()
+
+    prompt = QA_ONLY_QUERY_TEMPLATE.format(
+        system_context=COACH_SYSTEM_PROMPT,
+        user_profile=user_profile,
+        active_context=active_context,
+        recent_workouts=recent_workouts,
+        user_data=user_data,
+        chat_history=chat_history,
+        question=question,
+    )
+
+    response = await client.aio.models.generate_content(
+        model=MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.7,
+            max_output_tokens=1000,
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+        ),
+    )
+
+    text = response.text
+    reply = text.strip() if text else "抱歉，我現在沒有回應，請再問一次 🙏"
+    # Note: NO _execute_data_commands here — Q&A never modifies data
+
+    try:
+        db.save_chat_message("assistant", reply)
+    except Exception:
+        logger.exception("Failed to save assistant message")
+
+    # Only fire context extraction (no food/workout extraction in Q&A mode)
+    asyncio.create_task(_extract_and_save_context(question))
 
     return reply
 

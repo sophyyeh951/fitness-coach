@@ -1,10 +1,10 @@
 """
 Message handlers — dispatches LINE messages to the appropriate logic.
 
-Text messages:
-  - Starts with "記錄" or "訓練" → workout recording
-  - Starts with "/" → command (e.g. /目標, /今日, /週報)
-  - Otherwise → Q&A with AI coach
+Text messages (session-first routing):
+  1. Active session → route to multi-turn flow handler
+  2. Starts with "/" → slash command dispatch
+  3. Otherwise → Q&A only (NEVER logs food/workout)
 
 Image messages:
   - Food photo → nutritional analysis
@@ -18,6 +18,7 @@ import logging
 from datetime import date
 
 from linebot.v3.messaging import AsyncMessagingApiBlob
+from linebot.v3.messaging import TextMessage as LineTextMessage
 
 from app.config import today_tw
 from app.ai.image_analyzer import (
@@ -29,53 +30,248 @@ from app.ai.image_analyzer import (
     format_body_data,
     format_nutrition_label,
 )
-from app.ai.coach import ask_coach, parse_workout
+from app.ai.coach import ask_coach, parse_workout, ask_coach_qa_only
 from app.db import queries as db
+from app.line.session import get_session, clear_session, set_session
+from app.line.confirm import (
+    CONFIRM_SENTINEL, CANCEL_SENTINEL, EDIT_SENTINEL,
+    MEAL_SENTINELS, NOTES_SKIP_SENTINEL,
+)
 
 logger = logging.getLogger(__name__)
 
-# Keywords that trigger workout recording
-WORKOUT_PREFIXES = ("記錄", "訓練", "練")
 
+async def handle_text_message(text: str, user_id: str = "default") -> str | LineTextMessage:
+    """Handle incoming text messages from LINE.
 
-async def handle_text_message(text: str) -> str:
-    """Handle incoming text messages from LINE."""
+    Returns either a plain str (for Q&A replies) or a LineTextMessage
+    (for confirm cards / quick-reply prompts). webhook.py handles both.
+    """
     text = text.strip()
 
-    # Command handling
+    # 1. Session continuation — check active multi-turn flow first
+    session = get_session(user_id)
+    if session:
+        return await _handle_session(text, session, user_id)
+
+    # 2. Slash command dispatch
     if text.startswith("/"):
-        return await _handle_command(text)
+        return await _handle_command(text, user_id)
 
-    # Workout recording
-    if any(text.startswith(p) for p in WORKOUT_PREFIXES):
-        return await _handle_workout(text)
+    # 3. Q&A only — NEVER logs anything
+    return await ask_coach_qa_only(text)
 
-    # Default: Q&A with AI coach
-    return await ask_coach(text)
+
+async def _handle_session(text: str, session: dict, user_id: str) -> str | LineTextMessage:
+    """Route a message to the correct session handler based on current mode."""
+    from app.line.commands.meal import (
+        handle_meal_type_selection,
+        handle_food_input,
+        handle_meal_confirm,
+        handle_meal_correction,
+    )
+    from app.line.commands.exercise import (
+        handle_exercise_list_input,
+        handle_exercise_confirm,
+        handle_notes_input,
+    )
+    from app.line.commands.body import handle_body_confirm
+
+    mode = session["mode"]
+    draft = session.get("draft", {})
+
+    # Meal flow
+    if mode == "awaiting_meal_type":
+        return await handle_meal_type_selection(text, user_id)
+    if mode == "awaiting_food":
+        return await handle_food_input(text, draft, user_id)
+    if mode == "awaiting_meal_confirm":
+        if text == CONFIRM_SENTINEL:
+            return await handle_meal_confirm(draft, user_id)
+        if text == CANCEL_SENTINEL:
+            clear_session(user_id)
+            return "已取消，沒有儲存任何資料。"
+        if text == EDIT_SENTINEL:
+            return "好，告訴我要改什麼？"
+        # Any other text = correction
+        return await handle_meal_correction(text, draft, user_id)
+
+    # Exercise flow
+    if mode == "awaiting_exercise_list":
+        return await handle_exercise_list_input(text, draft, user_id)
+    if mode == "awaiting_exercise_confirm":
+        if text == CONFIRM_SENTINEL:
+            return await handle_exercise_confirm(draft, user_id)
+        if text == CANCEL_SENTINEL:
+            clear_session(user_id)
+            return "已取消，沒有儲存任何資料。"
+        if text == EDIT_SENTINEL:
+            return "好，告訴我要改什麼？"
+        return await handle_exercise_list_input(text, draft, user_id)
+
+    # Notes prompt
+    if mode == "awaiting_notes":
+        if text == NOTES_SKIP_SENTINEL:
+            clear_session(user_id)
+            return "好，這次不記備註。"
+        return await handle_notes_input(text, draft, user_id)
+
+    # Body data flow
+    if mode == "awaiting_body_confirm":
+        if text == CONFIRM_SENTINEL:
+            return await handle_body_confirm(draft, user_id)
+        if text == CANCEL_SENTINEL:
+            clear_session(user_id)
+            return "已取消，沒有儲存任何資料。"
+        return "請點選下方按鈕確認或取消。"
+
+    # Unknown mode — clear and fall through
+    clear_session(user_id)
+    return await ask_coach_qa_only(text)
+
+
+async def _handle_command(text: str, user_id: str) -> str | LineTextMessage:
+    """Dispatch slash commands to their handlers."""
+    from app.line.commands.meal import start_meal_flow
+    from app.line.commands.exercise import start_exercise_flow
+    from app.line.commands.body import start_body_flow
+    from app.line.commands.simple import handle_rest, handle_help
+    from app.line.commands.today import handle_today
+    from app.line.commands.next_session import handle_next_session
+    from app.line.commands.report import handle_weekly_report
+    from app.line.commands.schedule import handle_schedule
+
+    parts = text.split(maxsplit=1)
+    cmd = parts[0].lower()
+    args = parts[1].strip() if len(parts) > 1 else ""
+
+    dispatch = {
+        "/吃": lambda: start_meal_flow(user_id),
+        "/動": lambda: start_exercise_flow(args, user_id),
+        "/身體": lambda: start_body_flow(user_id),
+        "/休息": lambda: handle_rest(args, user_id),
+        "/今日": lambda: handle_today(),
+        "/下次": lambda: handle_next_session(args),
+        "/週報": lambda: handle_weekly_report(),
+        "/計畫": lambda: handle_schedule(args, user_id),
+        "/?": lambda: handle_help(),
+        "/刪": lambda: _handle_delete(args),
+        "/改": lambda: _handle_update(args),
+    }
+
+    handler = dispatch.get(cmd)
+    if handler:
+        return await handler()
+
+    return f"未知指令：{cmd}\n輸入 /? 查看所有指令"
+
+
+async def _handle_delete(args: str) -> str:
+    """Delete a meal or workout by ID. Usage: /刪 37"""
+    if not args.isdigit():
+        return "格式：/刪 [ID]\n例：/刪 37"
+    item_id = int(args)
+    # Try meal first, then workout
+    deleted = db.delete_meal(item_id)
+    if not deleted:
+        deleted = db.delete_workout(item_id)
+    return f"✅ #{item_id} 已刪除" if deleted else f"找不到 #{item_id}，請用 /今日 確認 ID"
+
+
+async def _handle_update(args: str) -> str:
+    """Update a meal attribute. Usage: /改 37 午餐  or  /改 37 180kcal"""
+    import re
+    parts = args.split(maxsplit=1)
+    if len(parts) < 2 or not parts[0].isdigit():
+        return "格式：/改 [ID] [修改內容]\n例：/改 37 午餐\n   /改 37 180kcal"
+
+    item_id = int(parts[0])
+    change = parts[1].strip()
+
+    meal_type_map = {"早餐": "breakfast", "午餐": "lunch", "晚餐": "dinner", "點心": "snack"}
+    if change in meal_type_map:
+        db.update_meal(item_id, {"meal_type": meal_type_map[change]})
+        return f"✅ #{item_id} 已改為{change}"
+
+    kcal_match = re.search(r"(\d+)\s*kcal", change)
+    if kcal_match:
+        db.update_meal(item_id, {"total_calories": float(kcal_match.group(1))})
+        return f"✅ #{item_id} 熱量已更新為 {kcal_match.group(1)}kcal"
+
+    return "不確定要改什麼。\n支援：餐別（早餐/午餐/晚餐/點心）或熱量（如 180kcal）"
 
 
 async def handle_image_message(
     message_id: str,
     blob_api: AsyncMessagingApiBlob,
-) -> str:
-    """Handle incoming image messages — classify and route."""
-    # Download image from LINE
+    user_id: str = "default",
+) -> str | LineTextMessage:
+    """Handle incoming image messages — classify and route.
+
+    If user is in an active /吃 session (awaiting_food), route the image
+    directly into the meal flow instead of using the old silent-save path.
+    """
+    from app.ai.image_analyzer import analyze_food_photo, analyze_nutrition_label
+
     response = await blob_api.get_message_content(message_id)
     image_bytes = response
 
-    # Step 1: Classify the image
+    # Check for active session
+    session = get_session(user_id)
+
+    # Check for body photo session
+    if session and session["mode"] == "awaiting_body_photo":
+        from app.line.commands.body import handle_body_photo
+        return await handle_body_photo(image_bytes, user_id)
+
+    in_meal_flow = session and session["mode"] == "awaiting_food"
+
+    if in_meal_flow:
+        draft = session.get("draft", {})
+        meal_type_display = draft.get("meal_type_display", "")
+        img_type = await classify_image(image_bytes)
+
+        if img_type == "nutrition_label":
+            parsed = await analyze_nutrition_label(image_bytes)
+            draft_data = {**draft, **{
+                "foods": [{"name": parsed.get("product_name", "食品"),
+                           "portion": parsed.get("serving_size", "1份"),
+                           "calories": parsed.get("calories_per_serving", 0),
+                           "protein": parsed.get("protein_per_serving", 0),
+                           "carbs": parsed.get("carbs_per_serving", 0),
+                           "fat": parsed.get("fat_per_serving", 0)}],
+                "total_calories": parsed.get("calories_per_serving", 0),
+                "total_protein": parsed.get("protein_per_serving", 0),
+                "total_carbs": parsed.get("carbs_per_serving", 0),
+                "total_fat": parsed.get("fat_per_serving", 0),
+            }}
+        else:
+            # food photo or unknown — treat as food
+            parsed = await analyze_food_photo(image_bytes)
+            draft_data = {**draft, **{
+                "foods": parsed.get("foods", []),
+                "total_calories": parsed.get("total_calories", 0),
+                "total_protein": parsed.get("total_protein", 0),
+                "total_carbs": parsed.get("total_carbs", 0),
+                "total_fat": parsed.get("total_fat", 0),
+            }}
+
+        from app.line.commands.meal import _build_meal_confirm_card
+        set_session(user_id, mode="awaiting_meal_confirm", draft=draft_data)
+        return _build_meal_confirm_card(draft_data, meal_type_display)
+
+    # Not in meal flow — classify and route as before
     img_type = await classify_image(image_bytes)
     logger.info("Image classified as: %s", img_type)
 
-    # Step 2: Route to appropriate handler
     if img_type == "food":
         return await _handle_food_image(image_bytes)
     elif img_type == "body_data":
-        return await _handle_body_data_image(image_bytes)
+        from app.line.commands.body import handle_body_photo
+        return await handle_body_photo(image_bytes, user_id)
     elif img_type == "nutrition_label":
         return await _handle_nutrition_label_image(image_bytes)
     else:
-        # Unknown — try food analysis as default
         return await _handle_food_image(image_bytes)
 
 
@@ -176,58 +372,6 @@ async def _handle_nutrition_label_image(image_bytes: bytes) -> str:
         logger.exception("Failed to save nutrition label meal")
 
     return format_nutrition_label(result)
-
-
-async def _handle_workout(text: str) -> str:
-    """Parse and record a workout."""
-    parsed = await parse_workout(text)
-
-    try:
-        db.insert_workout(
-            workout_type=parsed.get("workout_type", "未分類"),
-            exercises=parsed.get("exercises", []),
-            duration_min=parsed.get("duration_min"),
-            estimated_calories=parsed.get("estimated_calories"),
-            notes=text,
-        )
-    except Exception:
-        logger.exception("Failed to save workout to database")
-        return "訓練記錄儲存失敗，請稍後再試 🙏"
-
-    # Format response
-    lines = ["✅ 訓練已記錄！\n"]
-    for ex in parsed.get("exercises", []):
-        parts = [f"• {ex.get('name', '?')}"]
-        if ex.get("sets") and ex.get("reps"):
-            parts.append(f"{ex['sets']}x{ex['reps']}")
-        if ex.get("weight_kg"):
-            parts.append(f"@ {ex['weight_kg']}kg")
-        if ex.get("duration_min"):
-            parts.append(f"{ex['duration_min']}分鐘")
-        lines.append(" ".join(parts))
-
-    cal = parsed.get("estimated_calories")
-    if cal:
-        lines.append(f"\n🔥 預估消耗：{cal} kcal")
-
-    return "\n".join(lines)
-
-
-async def _handle_command(text: str) -> str:
-    """Handle slash commands."""
-    cmd = text.split()[0].lower()
-
-    if cmd in ("/今日", "/today"):
-        return await _today_summary()
-    elif cmd in ("/目標", "/goal"):
-        return _show_goal()
-
-    return (
-        "可用指令：\n"
-        "/今日 — 查看今日飲食和訓練摘要\n"
-        "/目標 — 查看目前的健身目標\n"
-        "\n直接打字問問題，或傳食物照片/營養標示/體脂計截圖！"
-    )
 
 
 async def _today_summary() -> str:

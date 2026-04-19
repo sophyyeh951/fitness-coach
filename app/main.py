@@ -17,23 +17,35 @@ scheduler = AsyncIOScheduler()
 
 
 async def _morning_checkin():
-    """Morning check-in: ask what's today's plan to enable Stage 1 calorie estimate."""
+    """Morning check-in: reads today's schedule and sends a quick-tap message."""
     try:
-        from app.line.push import push_text
+        from app.line.push import push_line_message
+        from app.db.schedule import get_today_exercise, WEEKDAY_CN
         from app.config import today_tw
+        from linebot.v3.messaging import TextMessage, QuickReply, QuickReplyItem, MessageAction
 
         today = today_tw()
-        weekday_map = ["一", "二", "三", "四", "五", "六", "日"]
-        weekday = weekday_map[today.weekday()]
+        weekday_key = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"][today.weekday()]
+        weekday_cn = WEEKDAY_CN[weekday_key]
+        planned = get_today_exercise(today)
 
-        msg = (
-            f"早安！今天星期{weekday} 🌅\n\n"
-            f"今天是什麼運動日呢？\n"
-            f"（羽球 / 重訓上半身 / 重訓臀腿 / 休息日）\n\n"
-            f"告訴我之後，我就可以幫你預估今天的熱量消耗，方便安排飲食喔！"
+        if planned:
+            body = f"早安 💪 今天{weekday_cn}，計畫：{planned}"
+            confirm_text = f"✅ 就{planned}"
+        else:
+            body = f"早安 💪 今天{weekday_cn}，今天做什麼運動？"
+            confirm_text = "✅ 按計畫"
+
+        msg = TextMessage(
+            text=body,
+            quick_reply=QuickReply(items=[
+                QuickReplyItem(action=MessageAction(label=confirm_text, text=f"今天{planned or '按計畫'}")),
+                QuickReplyItem(action=MessageAction(label="🔄 換其他", text="今天換運動")),
+                QuickReplyItem(action=MessageAction(label="😴 今天休息", text="/休息")),
+            ]),
         )
-        push_text(msg)
-        logger.info("Morning check-in sent")
+        push_line_message(msg)
+        logger.info("Morning check-in sent for %s: %s", weekday_cn, planned)
     except Exception:
         logger.exception("Failed to send morning check-in")
 
@@ -49,6 +61,18 @@ async def _evening_summary():
         logger.info("Evening summary pushed successfully")
     except Exception:
         logger.exception("Failed to push evening summary")
+
+
+async def _weekly_report():
+    """Auto-send weekly report every Sunday at 20:00 Taiwan time."""
+    try:
+        from app.line.push import push_text
+        from app.line.commands.report import handle_weekly_report
+        report = await handle_weekly_report()
+        push_text(report)
+        logger.info("Weekly report sent")
+    except Exception:
+        logger.exception("Failed to send weekly report")
 
 
 async def _keep_alive():
@@ -75,6 +99,10 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(
         _evening_summary,
         CronTrigger(hour=23, minute=0, timezone=TW_TZ),
+    )
+    scheduler.add_job(
+        _weekly_report,
+        CronTrigger(day_of_week="sun", hour=20, minute=0, timezone=TW_TZ),
     )
     scheduler.add_job(_keep_alive, "interval", minutes=10)
     scheduler.start()
