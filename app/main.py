@@ -51,6 +51,18 @@ async def _evening_summary():
         logger.exception("Failed to push evening summary")
 
 
+async def _weekly_report():
+    """Auto-send weekly report every Sunday at 20:00 Taiwan time."""
+    try:
+        from app.line.push import push_text
+        from app.line.commands.report import handle_weekly_report
+        report = await handle_weekly_report()
+        push_text(report)
+        logger.info("Weekly report sent")
+    except Exception:
+        logger.exception("Failed to send weekly report")
+
+
 async def _keep_alive():
     """Ping self every 10 minutes to prevent Render free tier from sleeping."""
     try:
@@ -75,6 +87,10 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(
         _evening_summary,
         CronTrigger(hour=23, minute=0, timezone=TW_TZ),
+    )
+    scheduler.add_job(
+        _weekly_report,
+        CronTrigger(day_of_week="sun", hour=20, minute=0, timezone=TW_TZ),
     )
     scheduler.add_job(_keep_alive, "interval", minutes=10)
     scheduler.start()
