@@ -28,6 +28,8 @@ def test_get_session_returns_none_when_expired():
         from app.line.session import get_session
         result = get_session("U123")
     assert result is None
+    # Also verify the expired row was deleted
+    mock_sb.table.return_value.delete.return_value.eq.assert_called_once_with("user_id", "U123")
 
 
 def test_get_session_returns_session_when_valid():
