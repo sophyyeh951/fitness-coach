@@ -42,6 +42,17 @@ def push_text(text: str, user_id: str | None = None) -> None:
         )
 
 
+def push_line_message(message, user_id: str | None = None) -> None:
+    """Send any LINE Message object (TextMessage, etc.) as a push."""
+    target = user_id or LINE_USER_ID
+    if not target:
+        logger.warning("No LINE_USER_ID set, cannot push message")
+        return
+    with ApiClient(config) as api_client:
+        api = MessagingApi(api_client)
+        api.push_message(PushMessageRequest(to=target, messages=[message]))
+
+
 def push_image(original_url: str, preview_url: str, user_id: str | None = None) -> None:
     """Send a push image message to a user."""
     target = user_id or LINE_USER_ID
