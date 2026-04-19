@@ -155,6 +155,8 @@ async def _handle_command(text: str, user_id: str) -> str | LineTextMessage:
         "/週報": lambda: handle_weekly_report(),
         "/計畫": lambda: handle_schedule(args, user_id),
         "/?": lambda: handle_help(),
+        "/刪": lambda: _handle_delete(args),
+        "/改": lambda: _handle_update(args),
     }
 
     handler = dispatch.get(cmd)
@@ -162,6 +164,41 @@ async def _handle_command(text: str, user_id: str) -> str | LineTextMessage:
         return await handler()
 
     return f"未知指令：{cmd}\n輸入 /? 查看所有指令"
+
+
+async def _handle_delete(args: str) -> str:
+    """Delete a meal or workout by ID. Usage: /刪 37"""
+    if not args.isdigit():
+        return "格式：/刪 [ID]\n例：/刪 37"
+    item_id = int(args)
+    # Try meal first, then workout
+    deleted = db.delete_meal(item_id)
+    if not deleted:
+        deleted = db.delete_workout(item_id)
+    return f"✅ #{item_id} 已刪除" if deleted else f"找不到 #{item_id}，請用 /今日 確認 ID"
+
+
+async def _handle_update(args: str) -> str:
+    """Update a meal attribute. Usage: /改 37 午餐  or  /改 37 180kcal"""
+    import re
+    parts = args.split(maxsplit=1)
+    if len(parts) < 2 or not parts[0].isdigit():
+        return "格式：/改 [ID] [修改內容]\n例：/改 37 午餐\n   /改 37 180kcal"
+
+    item_id = int(parts[0])
+    change = parts[1].strip()
+
+    meal_type_map = {"早餐": "breakfast", "午餐": "lunch", "晚餐": "dinner", "點心": "snack"}
+    if change in meal_type_map:
+        db.update_meal(item_id, {"meal_type": meal_type_map[change]})
+        return f"✅ #{item_id} 已改為{change}"
+
+    kcal_match = re.search(r"(\d+)\s*kcal", change)
+    if kcal_match:
+        db.update_meal(item_id, {"total_calories": float(kcal_match.group(1))})
+        return f"✅ #{item_id} 熱量已更新為 {kcal_match.group(1)}kcal"
+
+    return "不確定要改什麼。\n支援：餐別（早餐/午餐/晚餐/點心）或熱量（如 180kcal）"
 
 
 async def handle_image_message(
