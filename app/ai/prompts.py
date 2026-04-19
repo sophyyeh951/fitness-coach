@@ -261,3 +261,32 @@ WORKOUT_MENTION_PROMPT = """\
 
 回覆純 JSON，不要其他文字。
 """
+
+QA_ONLY_QUERY_TEMPLATE = """\
+{system_context}
+
+重要規則：這是純問答模式。不論用戶說什麼，你都不能記錄飲食、訓練或身體數據。
+如果用戶提到食物（如「我吃了一個便當」），只提供營養資訊，並說：「要記錄的話用 /吃」。
+如果用戶提到運動，只給建議，不記錄，並說：「要記錄的話用 /動」。
+絕對不要輸出任何 [DELETE_MEAL:] [UPDATE_MEAL:] [DELETE_WORKOUT:] 等指令標記。
+
+--- 我的基本資料 ---
+{user_profile}
+
+--- 近期情境筆記 ---
+{active_context}
+
+--- 最近訓練紀錄 ---
+{recent_workouts}
+
+--- 今日數據 ---
+{user_data}
+
+--- 最近對話 ---
+{chat_history}
+
+--- 我剛說的 ---
+{question}
+
+（直接回覆，不要打招呼，不要記錄任何資料）
+"""
