@@ -41,13 +41,86 @@ The current chatbot has a high correction rate: 49 out of 119 user messages (41%
 | `/身體` | `/身體` + PICOOC screenshot | Log body composition data |
 | `/休息 [原因]` | `/休息 健檢` | Declare rest day |
 | `/今日` | `/今日` | View today's full log with IDs for editing |
-| `/下次 [部位]` | `/下次 上半身` | Get next workout suggestion based on last session notes |
-| `/週報` | `/週報` | 7-day rolling summary (also sent automatically Sunday evening) |
+| `/下次 [部位]` | `/下次 上半身` | Get next session plan based on last session of that type + notes |
+| `/週報` | `/週報` | 7-day rolling summary (auto-sent Sunday 20:00 Taiwan time) |
+| `/計畫` | `/計畫` | View or update weekly exercise schedule |
 | `/?` | `/?` | Display command guide in chat |
 
 ### `/?` Guide Message (as sent in LINE)
 
 ```
+📋 小健指令表
+──────────────
+/吃        記錄飲食（照片/文字/標籤）
+/動        記錄運動（任何種類）
+           例：/動 游泳 45分鐘
+/身體      上傳 PICOOC 截圖
+/休息      記錄休息日  例：/休息 健檢
+/今日      查看今日紀錄 + 可刪除/修改
+/下次      下次訓練建議  例：/下次 上半身
+/計畫      查看或修改週計畫
+/週報      近7天總結（週日20:00自動發送）
+/?         顯示這張指令表
+──────────────
+Apple Watch 數據每天自動同步，無需手動傳
+```
+
+---
+
+## Weekly Schedule System
+
+### Purpose
+Drives the morning push "今天練什麼" so the bot knows what's planned each day without guessing rotation.
+
+### Storage
+Stored in `user_profile.exercise_habits.weekly_schedule` as JSON with optional date-range overrides:
+
+```json
+{
+  "default": {
+    "monday": "重訓",
+    "tuesday": "羽球",
+    "wednesday": "重訓",
+    "thursday": "重訓",
+    "friday": "重訓",
+    "saturday": "羽球",
+    "sunday": "羽球"
+  },
+  "overrides": [
+    {
+      "from": "2026-05-01",
+      "to": "2026-06-30",
+      "thursday": "游泳"
+    }
+  ]
+}
+```
+
+### Updating the schedule
+User can update via natural language in Q&A:
+- "五月之後週四改成游泳" → bot updates the override entry
+- "下週三休息" → bot adds a one-day override
+
+Or via `/計畫` command:
+```
+You: /計畫
+
+Bot: 📅 你的週計畫
+     週一 重訓　週二 羽球　週三 重訓
+     週四 重訓　週五 重訓　週六 羽球　週日 羽球
+     ──────────
+     5/1–6/30：週四 → 游泳（晚上課）
+     [✏️ 修改]
+```
+
+### Key rules
+- Schedule is a guide, not a lock. Morning push always shows override options.
+- If no schedule set for a day, morning push shows generic options.
+- `/下次` is independent of the schedule — it only cares about the type you specify.
+
+---
+
+## `/下次` — Clarification
 📋 小健指令表
 ──────────────
 /吃        記錄飲食（照片/文字/標籤）
@@ -200,39 +273,62 @@ Bot: ━━━━━━━━━━━━━━━
 ## Apple Watch Integration — Improvement
 
 ### Remove from iOS Shortcut
-- `steps` — inaccurate for badminton/gym users, removed entirely
+- `steps` — inaccurate for badminton/gym users (arm movements don't count as steps; data was unreliable e.g. 25,172 steps on a normal day). Remove entirely.
 
 ### Keep in iOS Shortcut
 - `active_calories` — useful for daily calorie balance
 - `resting_heart_rate` — useful for recovery tracking
 - `weight` — if synced from PICOOC via Apple Health
+- `body_fat_pct` — if synced from PICOOC via Apple Health
 
-### No changes needed on the server endpoint (`/health-data`)
-Just update the iOS Shortcut to stop sending `steps`.
+### How to remove steps from the Shortcut
+In the **捷徑 app** on iPhone → open "同步健康數據" → delete **action #3** (尋找健康樣本 → 步數) → in the JSON body of action #6, delete the `"steps": steps 的數值,` line.
+
+### No server changes needed
+The `/health-data` endpoint already handles missing fields gracefully.
 
 ---
 
 ## Morning Push — Redesigned
 
-Current morning push is a text block. New version:
+Reads today's day-of-week from the weekly schedule. Format:
 
 ```
-早安 💪 根據你的訓練輪替，今天建議：臀腿日
-熱量目標：1,850kcal（運動日）
+早安 💪 今天週四，計畫：重訓日
+熱量目標：1,850kcal
 
-[✅ 就臀腿] [🔄 換上半身] [😴 今天休息]
+[✅ 照計畫] [🔄 換其他] [😴 今天休息]
 ```
 
-Tapping any button:
-- Sets today's workout type (used for calorie estimate all day)
-- Locks in the calorie target
-- No further input needed
+Tapping [✅ 照計畫]:
+- Confirms today's exercise type
+- Locks in calorie target for the day
+- Bot uses this context all day for Q&A advice
 
-If no tap by 10am, bot sends a gentle nudge once.
+Tapping [🔄 換其他]:
+- Bot sends quick-reply with exercise type options
+- User picks the actual activity for today
+
+Tapping [😴 今天休息]:
+- Logs a rest day automatically
+- Calorie target adjusts to rest-day baseline
+
+**If no tap by 10:00am:** Bot sends one gentle nudge, then drops it.
+
+**Initial schedule to seed (from user, April 2026):**
+- 週一 重訓、週二 羽球、週三 重訓、週四 重訓、週五 重訓、週六 羽球、週日 羽球
+- Override 2026-05-01 to 2026-06-30: 週四 → 游泳
 
 ---
 
 ## `/下次` — Next Session Suggestion
+
+**Important design note:** `/下次` is fully independent of the weekly schedule and rotation. It does not predict what exercise is due next. It only answers: "given the last time I did THIS specific type, what should I do this time?" The rotation question is answered by the morning push schedule.
+
+This means `/下次` works correctly even when:
+- The schedule changes seasonally (swimming in May/June)
+- A week is disrupted by illness, travel, or rest days
+- A new exercise type is introduced
 
 User specifies the body part:
 ```
