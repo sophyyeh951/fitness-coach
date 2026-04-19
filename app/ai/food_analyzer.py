@@ -74,6 +74,50 @@ async def analyze_food_photo(image_bytes: bytes) -> dict:
         }
 
 
+async def parse_food_text(text: str, is_correction: bool = False) -> dict:
+    """Parse a free-text food description into structured nutrition data.
+
+    Returns dict with keys: foods, total_calories, total_protein, total_carbs, total_fat
+    """
+    import json
+    from google.genai import types
+    from app.config import GEMINI_API_KEY
+
+    prompt = f"""\
+請把以下飲食描述解析成 JSON 格式（不要加 markdown）：
+
+{text}
+
+格式：
+{{
+  "foods": [
+    {{"name": "食物名稱", "portion": "份量", "calories": 數字, "protein": 數字, "carbs": 數字, "fat": 數字}}
+  ],
+  "total_calories": 數字,
+  "total_protein": 數字,
+  "total_carbs": 數字,
+  "total_fat": 數字
+}}
+"""
+    try:
+        import asyncio
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model=MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(temperature=0.2),
+        )
+        raw = response.text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        return json.loads(raw.strip())
+    except Exception:
+        logger.exception("Failed to parse food text")
+        return {"foods": [], "total_calories": 0, "total_protein": 0, "total_carbs": 0, "total_fat": 0}
+
+
 def format_food_analysis(result: dict) -> str:
     """Format the analysis result as a readable LINE message."""
     lines = ["🍽 食物辨識結果\n"]

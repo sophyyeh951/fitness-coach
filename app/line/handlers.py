@@ -32,7 +32,7 @@ from app.ai.image_analyzer import (
 )
 from app.ai.coach import ask_coach, parse_workout, ask_coach_qa_only
 from app.db import queries as db
-from app.line.session import get_session, clear_session
+from app.line.session import get_session, clear_session, set_session
 from app.line.confirm import (
     CONFIRM_SENTINEL, CANCEL_SENTINEL, EDIT_SENTINEL,
     MEAL_SENTINELS, NOTES_SKIP_SENTINEL,
@@ -169,24 +169,66 @@ async def handle_image_message(
     blob_api: AsyncMessagingApiBlob,
     user_id: str = "default",
 ) -> str | LineTextMessage:
-    """Handle incoming image messages — classify and route."""
-    # Download image from LINE
+    """Handle incoming image messages — classify and route.
+
+    If user is in an active /吃 session (awaiting_food), route the image
+    directly into the meal flow instead of using the old silent-save path.
+    """
+    from app.ai.image_analyzer import analyze_food_photo, analyze_nutrition_label
+
     response = await blob_api.get_message_content(message_id)
     image_bytes = response
 
-    # Step 1: Classify the image
+    # Check for active /吃 session
+    session = get_session(user_id)
+    in_meal_flow = session and session["mode"] == "awaiting_food"
+
+    if in_meal_flow:
+        draft = session.get("draft", {})
+        meal_type_display = draft.get("meal_type_display", "")
+        img_type = await classify_image(image_bytes)
+
+        if img_type == "nutrition_label":
+            parsed = await analyze_nutrition_label(image_bytes)
+            draft_data = {**draft, **{
+                "foods": [{"name": parsed.get("product_name", "食品"),
+                           "portion": parsed.get("serving_size", "1份"),
+                           "calories": parsed.get("calories_per_serving", 0),
+                           "protein": parsed.get("protein_per_serving", 0),
+                           "carbs": parsed.get("carbs_per_serving", 0),
+                           "fat": parsed.get("fat_per_serving", 0)}],
+                "total_calories": parsed.get("calories_per_serving", 0),
+                "total_protein": parsed.get("protein_per_serving", 0),
+                "total_carbs": parsed.get("carbs_per_serving", 0),
+                "total_fat": parsed.get("fat_per_serving", 0),
+            }}
+        else:
+            # food photo or unknown — treat as food
+            parsed = await analyze_food_photo(image_bytes)
+            draft_data = {**draft, **{
+                "foods": parsed.get("foods", []),
+                "total_calories": parsed.get("total_calories", 0),
+                "total_protein": parsed.get("total_protein", 0),
+                "total_carbs": parsed.get("total_carbs", 0),
+                "total_fat": parsed.get("total_fat", 0),
+            }}
+
+        from app.line.commands.meal import _build_meal_confirm_card
+        set_session(user_id, mode="awaiting_meal_confirm", draft=draft_data)
+        return _build_meal_confirm_card(draft_data, meal_type_display)
+
+    # Not in meal flow — classify and route as before
     img_type = await classify_image(image_bytes)
     logger.info("Image classified as: %s", img_type)
 
-    # Step 2: Route to appropriate handler
     if img_type == "food":
         return await _handle_food_image(image_bytes)
     elif img_type == "body_data":
-        return await _handle_body_data_image(image_bytes)
+        from app.line.commands.body import handle_body_photo
+        return await handle_body_photo(image_bytes, user_id)
     elif img_type == "nutrition_label":
         return await _handle_nutrition_label_image(image_bytes)
     else:
-        # Unknown — try food analysis as default
         return await _handle_food_image(image_bytes)
 
 
