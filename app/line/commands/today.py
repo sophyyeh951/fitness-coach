@@ -107,21 +107,33 @@ async def handle_today() -> str:
     lines.append("")
 
     # ── Calorie burn estimate ──────────────────────────
-    from app.db.schedule import get_today_exercise
-    planned = get_today_exercise(today)
-
-    # Prefer actual Apple Watch active calories if available
+    # Priority 1: actual Apple Watch active calories
     actual_active = (metrics[-1].get("active_calories") or 0) if metrics else 0
     if actual_active > 0:
         total_burn = BASE_TDEE + actual_active
         lines.append(f"🔥 實際消耗：{total_burn:.0f}kcal（基底{BASE_TDEE} + 活動{actual_active:.0f}）")
     else:
-        exercise_est, exercise_label = _exercise_estimate(planned)
-        total_burn = BASE_TDEE + exercise_est
-        if planned:
-            lines.append(f"🔥 預估消耗：{total_burn:.0f}kcal（基底{BASE_TDEE} + {exercise_label}~{exercise_est}）")
+        # Priority 2: recorded workout for today (overrides schedule)
+        if workouts:
+            all_types = " ".join(w.get("workout_type", "") for w in workouts)
+            if any(k in all_types for k in ["休息"]):
+                exercise_est, exercise_label = 0, "休息日"
+            elif any(k in all_types for k in ["羽球", "打球"]):
+                exercise_est, exercise_label = 550, "羽球"
+            elif any(k in all_types for k in ["游泳"]):
+                exercise_est, exercise_label = 500, "游泳"
+            elif any(k in all_types for k in ["跑步", "有氧"]):
+                exercise_est, exercise_label = 500, "有氧"
+            else:
+                exercise_est, exercise_label = 300, "重訓"
         else:
-            lines.append(f"🔥 預估消耗：{total_burn:.0f}kcal（基底{BASE_TDEE} + 休息日~0）")
+            # Priority 3: scheduled plan (no workout recorded yet)
+            from app.db.schedule import get_today_exercise
+            planned = get_today_exercise(today)
+            exercise_est, exercise_label = _exercise_estimate(planned)
+
+        total_burn = BASE_TDEE + exercise_est
+        lines.append(f"🔥 預估消耗：{total_burn:.0f}kcal（基底{BASE_TDEE} + {exercise_label}~{exercise_est}）")
 
     # Calorie balance
     if total_kcal > 0:
