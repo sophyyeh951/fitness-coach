@@ -95,10 +95,18 @@ async def handle_today() -> str:
     metrics = db.get_body_metrics_range(today, today)
     if metrics:
         m = metrics[-1]
+        weight = m.get("weight")
+        bf = m.get("body_fat_pct")
+        mp = m.get("muscle_pct")
         parts = []
-        if m.get("weight"):           parts.append(f"體重 {m['weight']}kg")
-        if m.get("body_fat_pct"):     parts.append(f"體脂 {m['body_fat_pct']}%")
-        if m.get("active_calories"):  parts.append(f"活動消耗 {m['active_calories']:.0f}kcal")
+        if weight: parts.append(f"體重 {weight}kg")
+        if bf is not None:
+            tail = f"（{weight * bf / 100:.1f}kg）" if weight else ""
+            parts.append(f"體脂 {bf}%{tail}")
+        if mp is not None:
+            tail = f"（{weight * mp / 100:.1f}kg）" if weight else ""
+            parts.append(f"肌肉 {mp}%{tail}")
+        if m.get("active_calories"):    parts.append(f"活動消耗 {m['active_calories']:.0f}kcal")
         if m.get("resting_heart_rate"): parts.append(f"靜心率 {m['resting_heart_rate']}bpm")
         lines.append("⚖️ 身體：" + "　".join(parts))
     else:
