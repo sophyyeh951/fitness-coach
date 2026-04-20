@@ -58,7 +58,12 @@ async def handle_text_message(text: str, user_id: str = "default") -> str | Line
     if text.startswith("/"):
         return await _handle_command(text, user_id)
 
-    # 3. Q&A only — NEVER logs anything
+    # 3. Morning plan confirmation → calorie tip
+    plan_reply = _morning_plan_reply(text)
+    if plan_reply:
+        return plan_reply
+
+    # 4. Q&A only — NEVER logs anything
     return await ask_coach_qa_only(text)
 
 
@@ -164,6 +169,46 @@ async def _handle_command(text: str, user_id: str) -> str | LineTextMessage:
         return await handler()
 
     return f"未知指令：{cmd}\n輸入 /? 查看所有指令"
+
+
+def _morning_plan_reply(text: str) -> str | None:
+    """If text looks like a morning exercise plan confirmation, return a calorie tip.
+
+    The morning check-in quick-reply buttons send text like:
+      "今天羽球"  "今天重訓"  "今天游泳"  "今天換運動"
+    We intercept these to give the user a personalised calorie target.
+    """
+    if not text.startswith("今天"):
+        return None
+
+    BASE_TDEE = 1483
+    PROTEIN_TARGET = 86
+    DEFICIT = 300  # target daily deficit for fat loss
+
+    t = text
+    if any(k in t for k in ["羽球", "打球"]):
+        active, label = 550, "羽球"
+    elif any(k in t for k in ["游泳"]):
+        active, label = 500, "游泳"
+    elif any(k in t for k in ["跑步", "有氧"]):
+        active, label = 500, "有氧"
+    elif any(k in t for k in ["重訓", "訓練", "健身", "上半身", "臀腿", "胸", "背", "肩"]):
+        active, label = 300, "重訓"
+    elif any(k in t for k in ["休息", "不運動"]):
+        active, label = 0, "休息"
+    else:
+        return None  # not a plan keyword — let Q&A handle it
+
+    total_burn = BASE_TDEE + active
+    target_intake = total_burn - DEFICIT
+
+    lines = [
+        f"👍 {label}日加油！",
+        f"預估消耗 {total_burn}kcal（基底{BASE_TDEE} + {label}~{active}）",
+        f"→ 建議攝取約 {target_intake}kcal",
+        f"蛋白質至少 {PROTEIN_TARGET}g 💪",
+    ]
+    return "\n".join(lines)
 
 
 async def _handle_delete(args: str) -> str:
