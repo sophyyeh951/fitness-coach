@@ -85,7 +85,7 @@ async def handle_meal_correction(correction: str, draft: dict, user_id: str) -> 
 
 
 async def handle_meal_confirm(draft: dict, user_id: str) -> str:
-    """Save confirmed draft to database."""
+    """Save confirmed draft to database, then show today's running totals."""
     try:
         db.insert_meal(
             photo_url=None,
@@ -101,10 +101,70 @@ async def handle_meal_confirm(draft: dict, user_id: str) -> str:
         clear_session(user_id)
         display = draft.get("meal_type_display", "")
         kcal = draft.get("total_calories", 0)
-        return f"✅ {display}已儲存！合計 {kcal:.0f}kcal"
+
+        # Build today's running totals (including the meal just saved)
+        summary = _today_intake_summary()
+        return f"✅ {display}已儲存！合計 {kcal:.0f}kcal\n\n{summary}"
     except Exception:
         logger.exception("Failed to save meal")
         return "儲存失敗，請再試一次 🙏"
+
+
+def _today_intake_summary() -> str:
+    """Return a short summary of today's cumulative intake vs. burn estimate."""
+    from app.config import today_tw
+    from app.db.schedule import get_today_exercise
+    from app.line.commands.today import _exercise_estimate, BASE_TDEE, PROTEIN_TARGET
+
+    today = today_tw()
+    meals = db.get_meals_for_date(today)
+    workouts = db.get_workouts_for_date(today)
+    metrics = db.get_body_metrics_range(today, today)
+
+    total_kcal    = sum(m.get("total_calories", 0) or 0 for m in meals)
+    total_protein = sum(m.get("protein", 0) or 0 for m in meals)
+    total_carbs   = sum(m.get("carbs", 0) or 0 for m in meals)
+    total_fat     = sum(m.get("fat", 0) or 0 for m in meals)
+
+    # Burn estimate: Apple Watch > recorded workout > schedule
+    actual_active = (metrics[-1].get("active_calories") or 0) if metrics else 0
+    if actual_active > 0:
+        total_burn = BASE_TDEE + actual_active
+        burn_label = f"實際消耗 {total_burn:.0f}kcal"
+    else:
+        if workouts:
+            all_types = " ".join(w.get("workout_type", "") for w in workouts)
+            if any(k in all_types for k in ["休息"]):
+                ex_est, ex_label = 0, "休息日"
+            elif any(k in all_types for k in ["羽球", "打球"]):
+                ex_est, ex_label = 550, "羽球"
+            elif any(k in all_types for k in ["游泳"]):
+                ex_est, ex_label = 500, "游泳"
+            elif any(k in all_types for k in ["跑步", "有氧"]):
+                ex_est, ex_label = 500, "有氧"
+            else:
+                ex_est, ex_label = 300, "重訓"
+        else:
+            planned = get_today_exercise(today)
+            ex_est, ex_label = _exercise_estimate(planned)
+        total_burn = BASE_TDEE + ex_est
+        burn_label = f"預估消耗 {total_burn:.0f}kcal（{ex_label}日）"
+
+    remaining = total_burn - total_kcal
+    protein_gap = max(0, PROTEIN_TARGET - total_protein)
+
+    lines = [
+        f"📊 今日截至目前",
+        f"攝取 {total_kcal:.0f}kcal｜P {total_protein:.0f}g / C {total_carbs:.0f}g / F {total_fat:.0f}g",
+        f"🔥 {burn_label}",
+        f"→ 還可以吃 {remaining:.0f}kcal" if remaining > 0 else f"→ 已超出 {abs(remaining):.0f}kcal",
+    ]
+    if protein_gap > 0:
+        lines.append(f"🥩 蛋白質還差 {protein_gap:.0f}g（目標 {PROTEIN_TARGET}g）")
+    else:
+        lines.append("🥩 蛋白質達標 ✅")
+
+    return "\n".join(lines)
 
 
 def _build_meal_confirm_card(draft: dict, display: str, updated: bool = False) -> TextMessage:
