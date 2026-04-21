@@ -120,3 +120,17 @@ app.include_router(health_router, prefix="/api")
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
+
+
+@app.get("/version")
+async def version():
+    import os, subprocess
+    sha = os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("GIT_COMMIT")
+    if not sha:
+        try:
+            sha = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL
+            ).decode().strip()
+        except Exception:
+            sha = "unknown"
+    return {"sha": sha[:12] if sha else "unknown"}
