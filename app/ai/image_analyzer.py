@@ -257,11 +257,20 @@ def format_body_data(result: dict) -> str:
     if source:
         lines.append(f"來源：{source}\n")
 
-    field_map = [
-        ("weight", "體重", "kg"),
-        ("body_fat_pct", "體脂率", "%"),
-        ("muscle_pct", "肌肉率", "%"),
-        ("bmi", "BMI", ""),
+    weight = result.get("weight")
+    bf = result.get("body_fat_pct")
+    mp = result.get("muscle_pct")
+
+    if weight is not None:
+        lines.append(f"• 體重：{weight} kg")
+    if bf is not None:
+        tail = f"（脂肪 {weight * bf / 100:.1f} kg）" if weight else ""
+        lines.append(f"• 體脂率：{bf}%{tail}")
+    if mp is not None:
+        tail = f"（肌肉 {weight * mp / 100:.1f} kg）" if weight else ""
+        lines.append(f"• 肌肉率：{mp}%{tail}")
+
+    extras = [
         ("bmr", "基礎代謝", "kcal"),
         ("visceral_fat", "內臟脂肪", ""),
         ("bone_mass", "骨量", "kg"),
@@ -271,8 +280,7 @@ def format_body_data(result: dict) -> str:
         ("active_calories", "活動消耗", "kcal"),
         ("resting_heart_rate", "靜息心率", "bpm"),
     ]
-
-    for key, label, unit in field_map:
+    for key, label, unit in extras:
         val = result.get(key)
         if val is not None:
             lines.append(f"• {label}：{val}{unit}")

@@ -360,9 +360,7 @@ async def _handle_body_data_image(image_bytes: bytes) -> str:
     if result.get("body_fat_pct") is not None:
         metrics["body_fat_pct"] = result["body_fat_pct"]
     if result.get("muscle_pct") is not None:
-        metrics["muscle_mass"] = result["muscle_pct"]  # store as muscle_mass field
-    if result.get("bmi") is not None:
-        metrics["bmi"] = result["bmi"]
+        metrics["muscle_pct"] = result["muscle_pct"]
     if result.get("steps") is not None:
         metrics["steps"] = result["steps"]
     if result.get("resting_heart_rate") is not None:

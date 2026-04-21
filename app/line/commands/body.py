@@ -32,19 +32,26 @@ async def handle_body_photo(image_bytes: bytes, user_id: str) -> TextMessage | s
         "weight": result.get("weight"),
         "body_fat_pct": result.get("body_fat_pct"),
         "muscle_pct": result.get("muscle_pct"),
-        "bmi": result.get("bmi"),
-        "measurement_date": result.get("measurement_date") or today_tw().isoformat(),
+        "date": result.get("measurement_date") or today_tw().isoformat(),
     }
     set_session(user_id, mode="awaiting_body_confirm", draft=draft)
 
     lines = []
-    if draft["weight"]: lines.append(f"• 體重：{draft['weight']}kg")
-    if draft["body_fat_pct"]: lines.append(f"• 體脂率：{draft['body_fat_pct']}%")
-    if draft["muscle_pct"]: lines.append(f"• 肌肉率：{draft['muscle_pct']}%")
-    if draft["bmi"]: lines.append(f"• BMI：{draft['bmi']}")
+    weight = draft["weight"]
+    bf = draft["body_fat_pct"]
+    mp = draft["muscle_pct"]
+    if weight: lines.append(f"• 體重：{weight} kg")
+    if bf is not None:
+        fat_mass = weight * bf / 100 if weight else None
+        tail = f"（脂肪 {fat_mass:.1f} kg）" if fat_mass else ""
+        lines.append(f"• 體脂率：{bf}%{tail}")
+    if mp is not None:
+        muscle_mass = weight * mp / 100 if weight else None
+        tail = f"（肌肉 {muscle_mass:.1f} kg）" if muscle_mass else ""
+        lines.append(f"• 肌肉率：{mp}%{tail}")
 
     return build_confirm_card(
-        title=f"⚖️ 身體數據草稿（{draft['measurement_date']}）",
+        title=f"⚖️ 身體數據草稿（{draft['date']}）",
         lines=lines,
         total="確認儲存嗎？",
     )
@@ -54,8 +61,6 @@ async def handle_body_confirm(draft: dict, user_id: str) -> str:
     """Save confirmed body metrics to DB."""
     try:
         metrics = {k: v for k, v in draft.items() if v is not None}
-        if "muscle_pct" in metrics:
-            metrics["muscle_mass"] = metrics.pop("muscle_pct")
         db.upsert_body_metrics(metrics)
         clear_session(user_id)
         return f"✅ 身體數據已儲存！體重 {draft.get('weight', '?')}kg，體脂 {draft.get('body_fat_pct', '?')}%"

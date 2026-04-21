@@ -20,11 +20,12 @@ class HealthData(BaseModel):
     date: date
     weight: Optional[float] = None
     body_fat_pct: Optional[float] = None
-    muscle_mass: Optional[float] = None
-    bmi: Optional[float] = None
+    muscle_pct: Optional[float] = None
     steps: Optional[int] = None
     active_calories: Optional[float] = None
     resting_heart_rate: Optional[int] = None
+
+    model_config = {"extra": "ignore"}
 
 
 @router.post("/health-data")
