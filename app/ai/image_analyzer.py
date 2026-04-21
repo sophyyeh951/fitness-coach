@@ -104,6 +104,28 @@ BODY_DATA_PROMPT = """\
 回覆純 JSON，不要其他文字。
 """
 
+WORKOUT_PHOTO_PROMPT = """\
+這是一張運動紀錄截圖（可能來自 Apple Watch、健身 app、或手寫筆記）。
+使用者剛完成類型：「{workout_type}」
+
+請讀取：
+- 運動時長（分鐘，整數）
+- 活動消耗卡路里（整數，優先使用 active/active energy 數字，不要用 total）
+- 平均心率 bpm（如果有）
+- 備註（任何值得記下的資訊，如距離、配速、場次數）
+
+請用以下 JSON 格式回覆（不要加 markdown code block）：
+{{
+  "duration_min": 數字或null,
+  "estimated_calories": 數字或null,
+  "avg_heart_rate": 數字或null,
+  "notes": "備註字串或null"
+}}
+
+回覆純 JSON，不要其他文字。
+"""
+
+
 NUTRITION_LABEL_PROMPT = """\
 請讀取這張營養標示的內容。
 
@@ -205,6 +227,17 @@ async def analyze_body_data(image_bytes: bytes) -> dict:
         return _parse_json_response(raw)
     except json.JSONDecodeError:
         logger.error("Failed to parse body data JSON: %s", raw[:200])
+        return {"error": raw[:200]}
+
+
+async def analyze_workout_photo(image_bytes: bytes, workout_type: str = "") -> dict:
+    """Extract duration + calories from a workout screenshot (Apple Watch etc.)."""
+    prompt = WORKOUT_PHOTO_PROMPT.format(workout_type=workout_type or "未指定")
+    raw = await _gemini_vision(prompt, image_bytes)
+    try:
+        return _parse_json_response(raw)
+    except json.JSONDecodeError:
+        logger.error("Failed to parse workout photo JSON: %s", raw[:200])
         return {"error": raw[:200]}
 
 

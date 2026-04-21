@@ -1,10 +1,13 @@
 """
 /動 command — exercise logging flow.
 
-Usage: /動 [description]
-  /動 上半身重訓        → weight training: ask for exercise list
-  /動 羽球 2小時        → cardio: instant confirm card
-  /動 游泳 45分鐘       → cardio: instant confirm card
+Flow (like /吃):
+  1. /動                 → quick-reply [羽球][重訓][游泳][跑步][其他]
+  2. Tap type            → mode=awaiting_exercise_input, prompt for photo/text
+  3. Photo or text       → AI parses duration + kcal → confirm card
+                           (重訓 branches to awaiting_exercise_list for menu)
+
+Shortcut still works: /動 羽球 2小時 skips step 1-2.
 
 After saving, bot prompts for notes (one message, skippable).
 """
@@ -21,7 +24,8 @@ from linebot.v3.messaging import MessageAction, QuickReply, QuickReplyItem, Text
 from app.db import queries as db
 from app.line.confirm import (
     CONFIRM_SENTINEL, CANCEL_SENTINEL, NOTES_SKIP_SENTINEL,
-    build_confirm_card,
+    EXERCISE_SENTINELS, EXERCISE_TYPE_MAP,
+    build_confirm_card, build_quick_reply_prompt,
 )
 from app.line.session import clear_session, set_session
 
@@ -53,28 +57,152 @@ def _estimate_cardio_calories(description: str) -> int:
 
 
 async def start_exercise_flow(args: str, user_id: str) -> str | TextMessage:
-    """Entry point for /動 [description]."""
+    """Entry point for /動.
+
+    /動 alone         → show type quick reply
+    /動 [description] → go straight into parsing (backward-compat shortcut)
+    """
     if not args:
-        return "請告訴我今天做什麼運動\n例：/動 游泳 45分鐘\n   /動 上半身重訓"
+        set_session(user_id, mode="awaiting_exercise_type")
+        return build_quick_reply_prompt(
+            text="做什麼運動？",
+            options=[(label, sentinel) for label, sentinel in EXERCISE_SENTINELS.items()],
+        )
 
     if _is_weight_training(args):
         set_session(user_id, mode="awaiting_exercise_list", draft={"workout_type": args, "exercises": []})
         return f"💪 {args}\n練完後把菜單貼過來，格式隨意：\n例：硬舉 36kg 10x4\n   肩推 4kg 12x3"
-    else:
-        # Cardio — build confirm card immediately
-        estimated_kcal = _estimate_cardio_calories(args)
-        draft = {
-            "workout_type": args,
-            "exercises": [],
-            "duration_min": None,
-            "estimated_calories": estimated_kcal,
-        }
-        set_session(user_id, mode="awaiting_exercise_confirm", draft=draft)
-        return build_confirm_card(
-            title=f"🏃 {args}草稿",
-            lines=[f"預估消耗：~{estimated_kcal}kcal（Apple Watch 今晚自動同步更新）"],
-            total="確認儲存嗎？",
+
+    estimated_kcal = _estimate_cardio_calories(args)
+    draft = {
+        "workout_type": args,
+        "exercises": [],
+        "duration_min": None,
+        "estimated_calories": estimated_kcal,
+    }
+    set_session(user_id, mode="awaiting_exercise_confirm", draft=draft)
+    return build_confirm_card(
+        title=f"🏃 {args}草稿",
+        lines=[f"預估消耗：~{estimated_kcal}kcal"],
+        total="確認儲存嗎？",
+    )
+
+
+async def handle_exercise_type_selection(text: str, user_id: str) -> str | TextMessage:
+    """User tapped a type button (__ex_badminton__ etc.)."""
+    if text not in EXERCISE_TYPE_MAP:
+        return "請點選下方的運動類型按鈕 👇"
+
+    workout_type = EXERCISE_TYPE_MAP[text]
+
+    # 重訓 branches into the menu-list flow
+    if workout_type == "重訓":
+        set_session(
+            user_id,
+            mode="awaiting_exercise_list",
+            draft={"workout_type": workout_type, "exercises": []},
         )
+        return (
+            "💪 重訓\n"
+            "練完後把菜單貼過來，格式隨意：\n"
+            "例：硬舉 36kg 10x4\n"
+            "   肩推 4kg 12x3"
+        )
+
+    # Cardio types wait for photo or free-text
+    set_session(
+        user_id,
+        mode="awaiting_exercise_input",
+        draft={"workout_type": workout_type, "exercises": []},
+    )
+    return (
+        f"🏃 {workout_type}\n"
+        "傳 Apple Watch 截圖，或告訴我時長／消耗 👇\n"
+        "例：2小時 650kcal"
+    )
+
+
+async def handle_exercise_text_input(text: str, draft: dict, user_id: str) -> TextMessage:
+    """Parse a free-text input for a cardio-type exercise and build confirm card."""
+    workout_type = draft.get("workout_type", "運動")
+
+    # Try to extract explicit kcal first (user-provided overrides estimate)
+    kcal_match = re.search(r"(\d+)\s*k?cal", text, re.IGNORECASE)
+    if kcal_match:
+        estimated_kcal = int(kcal_match.group(1))
+    else:
+        estimated_kcal = _estimate_cardio_calories(f"{workout_type} {text}")
+
+    # Extract duration
+    duration_min = None
+    m = re.search(r"(\d+)\s*分鐘", text)
+    if m:
+        duration_min = int(m.group(1))
+    mh = re.search(r"(\d+(?:\.\d+)?)\s*小時", text)
+    if mh:
+        duration_min = int(float(mh.group(1)) * 60)
+
+    new_draft = {
+        **draft,
+        "duration_min": duration_min,
+        "estimated_calories": estimated_kcal,
+        "raw_input": text,
+    }
+    set_session(user_id, mode="awaiting_exercise_confirm", draft=new_draft)
+
+    lines = []
+    if duration_min:
+        lines.append(f"時長：{duration_min} 分鐘")
+    lines.append(f"消耗：~{estimated_kcal}kcal")
+
+    return build_confirm_card(
+        title=f"🏃 {workout_type}草稿",
+        lines=lines,
+        total="確認儲存嗎？",
+    )
+
+
+async def handle_exercise_photo_input(image_bytes: bytes, draft: dict, user_id: str) -> TextMessage:
+    """Parse a workout screenshot and build confirm card."""
+    from app.ai.image_analyzer import analyze_workout_photo
+
+    workout_type = draft.get("workout_type", "運動")
+    parsed = await analyze_workout_photo(image_bytes, workout_type=workout_type)
+
+    if "error" in parsed:
+        return build_confirm_card(
+            title=f"🏃 {workout_type}草稿",
+            lines=["（無法從圖片辨識數據，請改用文字輸入）"],
+            total="取消後重試，或直接確認以 0kcal 記錄？",
+        )
+
+    duration_min = parsed.get("duration_min")
+    estimated_kcal = parsed.get("estimated_calories") or 0
+    notes = parsed.get("notes")
+
+    new_draft = {
+        **draft,
+        "duration_min": duration_min,
+        "estimated_calories": estimated_kcal,
+        "photo_notes": notes,
+    }
+    set_session(user_id, mode="awaiting_exercise_confirm", draft=new_draft)
+
+    lines = []
+    if duration_min:
+        lines.append(f"時長：{duration_min} 分鐘")
+    if estimated_kcal:
+        lines.append(f"消耗：{estimated_kcal}kcal")
+    if parsed.get("avg_heart_rate"):
+        lines.append(f"平均心率：{parsed['avg_heart_rate']}bpm")
+    if notes:
+        lines.append(f"📝 {notes}")
+
+    return build_confirm_card(
+        title=f"🏃 {workout_type}草稿",
+        lines=lines if lines else ["（未辨識到數據）"],
+        total="確認儲存嗎？",
+    )
 
 
 async def handle_exercise_list_input(text: str, draft: dict, user_id: str) -> TextMessage:
@@ -107,7 +235,7 @@ async def handle_exercise_confirm(draft: dict, user_id: str) -> str | TextMessag
             exercises=draft.get("exercises", []),
             duration_min=draft.get("duration_min"),
             estimated_calories=draft.get("estimated_calories"),
-            notes=None,
+            notes=draft.get("photo_notes"),
         )
         clear_session(user_id)
         # Prompt for notes — skippable
@@ -130,7 +258,9 @@ async def handle_notes_input(notes_text: str, draft: dict, user_id: str) -> str:
         workouts_today = db.get_workouts_for_date(today_tw())
         if workouts_today:
             latest_id = workouts_today[-1]["id"]
-            db.update_workout(latest_id, {"notes": notes_text})
+            existing_notes = workouts_today[-1].get("notes") or ""
+            combined = f"{existing_notes}\n{notes_text}".strip() if existing_notes else notes_text
+            db.update_workout(latest_id, {"notes": combined})
         clear_session(user_id)
         return "📝 備註已記下。下次練這個部位前用 /下次 就會提醒你！"
     except Exception:

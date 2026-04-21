@@ -78,6 +78,8 @@ async def _handle_session(text: str, session: dict, user_id: str) -> str | LineT
     from app.line.commands.exercise import (
         handle_exercise_list_input,
         handle_exercise_confirm,
+        handle_exercise_text_input,
+        handle_exercise_type_selection,
         handle_notes_input,
     )
     from app.line.commands.body import handle_body_confirm
@@ -102,6 +104,10 @@ async def _handle_session(text: str, session: dict, user_id: str) -> str | LineT
         return await handle_meal_correction(text, draft, user_id)
 
     # Exercise flow
+    if mode == "awaiting_exercise_type":
+        return await handle_exercise_type_selection(text, user_id)
+    if mode == "awaiting_exercise_input":
+        return await handle_exercise_text_input(text, draft, user_id)
     if mode == "awaiting_exercise_list":
         return await handle_exercise_list_input(text, draft, user_id)
     if mode == "awaiting_exercise_confirm":
@@ -112,7 +118,11 @@ async def _handle_session(text: str, session: dict, user_id: str) -> str | LineT
             return "已取消，沒有儲存任何資料。"
         if text == EDIT_SENTINEL:
             return "好，告訴我要改什麼？"
-        return await handle_exercise_list_input(text, draft, user_id)
+        # Re-parse correction: cardio goes through text handler, strength through list handler
+        from app.line.commands.exercise import _is_weight_training
+        if draft.get("exercises") or _is_weight_training(draft.get("workout_type", "")):
+            return await handle_exercise_list_input(text, draft, user_id)
+        return await handle_exercise_text_input(text, draft, user_id)
 
     # Notes prompt
     if mode == "awaiting_notes":
@@ -181,9 +191,9 @@ def _morning_plan_reply(text: str) -> str | None:
     if not text.startswith("今天"):
         return None
 
-    BASE_TDEE = 1483
-    PROTEIN_TARGET = 86
-    DEFICIT = 300  # target daily deficit for fat loss
+    from app.line.commands.today import (
+        BASE_TDEE, DAILY_DEFICIT, PROTEIN_MIN, PROTEIN_IDEAL, calc_intake_target,
+    )
 
     t = text
     if any(k in t for k in ["羽球", "打球"]):
@@ -200,13 +210,13 @@ def _morning_plan_reply(text: str) -> str | None:
         return None  # not a plan keyword — let Q&A handle it
 
     total_burn = BASE_TDEE + active
-    target_intake = total_burn - DEFICIT
+    target_intake = calc_intake_target(total_burn)
 
     lines = [
         f"👍 {label}日加油！",
         f"預估消耗 {total_burn}kcal（基底{BASE_TDEE} + {label}~{active}）",
-        f"→ 建議攝取約 {target_intake}kcal",
-        f"蛋白質至少 {PROTEIN_TARGET}g 💪",
+        f"→ 建議攝取約 {target_intake:.0f}kcal（赤字 {DAILY_DEFICIT}）",
+        f"蛋白質 {PROTEIN_MIN}–{PROTEIN_IDEAL}g 💪",
     ]
     return "\n".join(lines)
 
@@ -268,6 +278,11 @@ async def handle_image_message(
     if session and session["mode"] == "awaiting_body_photo":
         from app.line.commands.body import handle_body_photo
         return await handle_body_photo(image_bytes, user_id)
+
+    # Check for exercise photo session (awaiting Apple Watch screenshot etc.)
+    if session and session["mode"] == "awaiting_exercise_input":
+        from app.line.commands.exercise import handle_exercise_photo_input
+        return await handle_exercise_photo_input(image_bytes, session.get("draft", {}), user_id)
 
     in_meal_flow = session and session["mode"] == "awaiting_food"
 
@@ -543,23 +558,22 @@ async def _today_summary() -> str:
         lines.append(f"\n🔥 預估總消耗：{total_burn:.0f} kcal")
         lines.append(f"  基底 {base_tdee} + {exercise_label} ~{exercise_estimate}")
 
-    # --- Calorie balance ---
+    # --- Intake target + balance ---
+    from app.line.commands.today import (
+        calc_intake_target, protein_status_line, DAILY_DEFICIT,
+    )
+    target = calc_intake_target(total_burn)
+    lines.append(f"  🎯 建議攝取 {target:.0f} kcal（赤字 {DAILY_DEFICIT}）")
     if total_cal > 0:
-        balance = total_cal - total_burn
-        if balance < 0:
-            lines.append(f"  → 赤字 {abs(balance):.0f} kcal ✅")
+        remaining = target - total_cal
+        if remaining > 0:
+            lines.append(f"  → 還可以吃 {remaining:.0f} kcal")
         else:
-            lines.append(f"  → 盈餘 {balance:.0f} kcal")
+            lines.append(f"  → 已超出目標 {abs(remaining):.0f} kcal")
 
-    # --- Protein warning: only when below lower bound ---
-    warnings = []
+    # --- Protein status ---
     if total_cal > 0:
-        protein_lower = 86
-        if total_pro < protein_lower:
-            warnings.append(f"🥩 蛋白質偏低（{total_pro:.0f}g），建議至少 {protein_lower}g")
-
-        if warnings:
-            lines.append("\n" + "\n".join(warnings))
+        lines.append("\n" + protein_status_line(total_pro))
 
     return "\n".join(lines)
 

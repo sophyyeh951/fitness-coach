@@ -6,8 +6,30 @@ from __future__ import annotations
 from app.db import queries as db
 from app.config import today_tw
 
-PROTEIN_TARGET = 86   # minimum grams
-BASE_TDEE = 1483      # sedentary TDEE (BMR 1236 × 1.2)
+BASE_TDEE = 1483          # sedentary TDEE (BMR 1236 × 1.2)
+DAILY_DEFICIT = 300       # target daily deficit for recomp
+MIN_DAILY_TARGET = 1300   # floor for intake target on rest days
+
+PROTEIN_MIN = 90          # floor for muscle preservation (~1.7g/kg body weight)
+PROTEIN_IDEAL = 107       # ideal for recomp (~2g/kg body weight)
+
+# Back-compat for any external importers; new code should use PROTEIN_MIN.
+PROTEIN_TARGET = PROTEIN_MIN
+
+
+def calc_intake_target(total_burn: float) -> float:
+    """Daily intake target = TDEE − deficit, floored at MIN_DAILY_TARGET."""
+    return max(MIN_DAILY_TARGET, total_burn - DAILY_DEFICIT)
+
+
+def protein_status_line(total_protein: float) -> str:
+    """Render one-line protein status against the 90–107g range."""
+    if total_protein < PROTEIN_MIN:
+        gap = PROTEIN_MIN - total_protein
+        return f"🥩 蛋白質還差 {gap:.0f}g（目標 {PROTEIN_MIN}–{PROTEIN_IDEAL}g）"
+    if total_protein < PROTEIN_IDEAL:
+        return f"🥩 蛋白質基本達標 ✅（理想 {PROTEIN_IDEAL}g）"
+    return "🥩 蛋白質達標 🎯"
 
 
 def _exercise_estimate(planned: str | None) -> tuple[int, str]:
@@ -63,12 +85,7 @@ async def handle_today() -> str:
         lines.append(f"  合計：{total_kcal:.0f}kcal")
         lines.append(f"  P {total_protein:.0f}g / C {total_carbs:.0f}g / F {total_fat:.0f}g")
 
-        # Protein gap
-        gap = PROTEIN_TARGET - total_protein
-        if gap > 0:
-            lines.append(f"  🥩 蛋白質還差 {gap:.0f}g（目標 {PROTEIN_TARGET}g）")
-        else:
-            lines.append(f"  🥩 蛋白質達標 ✅")
+        lines.append("  " + protein_status_line(total_protein))
 
         lines.append("  ─────────────────────")
         lines.append("  刪除：/刪 [ID]   修改餐別：/改 [ID] 午餐")
@@ -143,12 +160,20 @@ async def handle_today() -> str:
         total_burn = BASE_TDEE + exercise_est
         lines.append(f"🔥 預估消耗：{total_burn:.0f}kcal（基底{BASE_TDEE} + {exercise_label}~{exercise_est}）")
 
-    # Calorie balance
+    # Intake target (TDEE − 300 deficit, floored)
+    target = calc_intake_target(total_burn)
+    lines.append(f"🎯 建議攝取 {target:.0f}kcal（赤字 {DAILY_DEFICIT}）")
+
+    # Balance against target
     if total_kcal > 0:
-        balance = total_kcal - total_burn
-        if balance < 0:
-            lines.append(f"→ 赤字 {abs(balance):.0f}kcal ✅")
+        remaining = target - total_kcal
+        if remaining > 0:
+            lines.append(f"→ 還可以吃 {remaining:.0f}kcal")
         else:
-            lines.append(f"→ 盈餘 {balance:.0f}kcal")
+            lines.append(f"→ 已超出目標 {abs(remaining):.0f}kcal")
+        # Informational deficit vs actual burn
+        balance = total_burn - total_kcal
+        if balance > 0:
+            lines.append(f"  （實際赤字 {balance:.0f}kcal）")
 
     return "\n".join(lines)
