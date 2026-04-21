@@ -114,7 +114,10 @@ def _today_intake_summary() -> str:
     """Return a short summary of today's cumulative intake vs. burn estimate."""
     from app.config import today_tw
     from app.db.schedule import get_today_exercise
-    from app.line.commands.today import _exercise_estimate, BASE_TDEE, PROTEIN_TARGET
+    from app.line.commands.today import (
+        _exercise_estimate, BASE_TDEE, DAILY_DEFICIT,
+        calc_intake_target, protein_status_line,
+    )
 
     today = today_tw()
     meals = db.get_meals_for_date(today)
@@ -150,19 +153,17 @@ def _today_intake_summary() -> str:
         total_burn = BASE_TDEE + ex_est
         burn_label = f"預估消耗 {total_burn:.0f}kcal（{ex_label}日）"
 
-    remaining = total_burn - total_kcal
-    protein_gap = max(0, PROTEIN_TARGET - total_protein)
+    target = calc_intake_target(total_burn)
+    remaining = target - total_kcal
 
     lines = [
         f"📊 今日截至目前",
         f"攝取 {total_kcal:.0f}kcal｜P {total_protein:.0f}g / C {total_carbs:.0f}g / F {total_fat:.0f}g",
         f"🔥 {burn_label}",
-        f"→ 還可以吃 {remaining:.0f}kcal" if remaining > 0 else f"→ 已超出 {abs(remaining):.0f}kcal",
+        f"🎯 建議攝取 {target:.0f}kcal（赤字 {DAILY_DEFICIT}）",
+        f"→ 還可以吃 {remaining:.0f}kcal" if remaining > 0 else f"→ 已超出目標 {abs(remaining):.0f}kcal",
+        protein_status_line(total_protein),
     ]
-    if protein_gap > 0:
-        lines.append(f"🥩 蛋白質還差 {protein_gap:.0f}g（目標 {PROTEIN_TARGET}g）")
-    else:
-        lines.append("🥩 蛋白質達標 ✅")
 
     return "\n".join(lines)
 

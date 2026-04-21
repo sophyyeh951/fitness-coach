@@ -43,6 +43,16 @@ MEAL_TYPE_DB = {
     "__meal_snack__": "snack",
 }
 
+# Exercise type selection — used by /動 quick reply.
+EXERCISE_SENTINELS = {
+    "羽球": "__ex_badminton__",
+    "重訓": "__ex_strength__",
+    "游泳": "__ex_swim__",
+    "跑步": "__ex_run__",
+    "其他": "__ex_other__",
+}
+EXERCISE_TYPE_MAP = {v: k for k, v in EXERCISE_SENTINELS.items()}
+
 DIVIDER = "━━━━━━━━━━━━━━━"
 
 
