@@ -91,7 +91,10 @@ async def start_exercise_flow(args: str, user_id: str) -> str | TextMessage:
 async def handle_exercise_type_selection(text: str, user_id: str) -> str | TextMessage:
     """User tapped a type button (__ex_badminton__ etc.)."""
     if text not in EXERCISE_TYPE_MAP:
-        return "請點選下方的運動類型按鈕 👇"
+        return build_quick_reply_prompt(
+            text="請點選下方的運動類型按鈕 👇",
+            options=[(label, sentinel) for label, sentinel in EXERCISE_SENTINELS.items()],
+        )
 
     workout_type = EXERCISE_TYPE_MAP[text]
 

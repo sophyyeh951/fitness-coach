@@ -49,14 +49,17 @@ async def handle_text_message(text: str, user_id: str = "default") -> str | Line
     """
     text = text.strip()
 
-    # 1. Session continuation — check active multi-turn flow first
+    # 1. Slash commands override any active session — always restart flow.
+    # Otherwise, typing /動 while a prior /動 session is stuck in
+    # awaiting_exercise_type would route to the session handler, not restart.
+    if text.startswith("/"):
+        clear_session(user_id)
+        return await _handle_command(text, user_id)
+
+    # 2. Session continuation — multi-turn flow
     session = get_session(user_id)
     if session:
         return await _handle_session(text, session, user_id)
-
-    # 2. Slash command dispatch
-    if text.startswith("/"):
-        return await _handle_command(text, user_id)
 
     # 3. Morning plan confirmation → calorie tip
     plan_reply = _morning_plan_reply(text)

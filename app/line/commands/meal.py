@@ -50,7 +50,10 @@ async def start_meal_flow(user_id: str) -> TextMessage:
 async def handle_meal_type_selection(text: str, user_id: str) -> str | TextMessage:
     """Handle meal type button tap (e.g. __meal_lunch__)."""
     if text not in MEAL_TYPE_DB:
-        return "請點選下方的餐別按鈕 👇"
+        return build_quick_reply_prompt(
+            text="請點選下方的餐別按鈕 👇",
+            options=[(label, sentinel) for label, sentinel in MEAL_SENTINELS.items()],
+        )
 
     db_type = MEAL_TYPE_DB[text]
     display = MEAL_TYPE_MAP[text]
