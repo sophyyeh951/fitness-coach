@@ -84,6 +84,7 @@ async def _handle_session(text: str, session: dict, user_id: str) -> str | LineT
         handle_exercise_text_input,
         handle_exercise_type_selection,
         handle_notes_input,
+        handle_notes_skip,
     )
     from app.line.commands.body import handle_body_confirm
 
@@ -130,8 +131,7 @@ async def _handle_session(text: str, session: dict, user_id: str) -> str | LineT
     # Notes prompt
     if mode == "awaiting_notes":
         if text == NOTES_SKIP_SENTINEL:
-            clear_session(user_id)
-            return "好，這次不記備註。"
+            return await handle_notes_skip(user_id)
         return await handle_notes_input(text, draft, user_id)
 
     # Body data flow

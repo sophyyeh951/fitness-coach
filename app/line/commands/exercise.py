@@ -256,6 +256,7 @@ async def handle_exercise_confirm(draft: dict, user_id: str) -> str | TextMessag
 
 async def handle_notes_input(notes_text: str, draft: dict, user_id: str) -> str:
     """Save post-workout notes to the most recently inserted workout."""
+    from app.line.commands.meal import _today_intake_summary
     try:
         from app.config import today_tw
         workouts_today = db.get_workouts_for_date(today_tw())
@@ -265,11 +266,18 @@ async def handle_notes_input(notes_text: str, draft: dict, user_id: str) -> str:
             combined = f"{existing_notes}\n{notes_text}".strip() if existing_notes else notes_text
             db.update_workout(latest_id, {"notes": combined})
         clear_session(user_id)
-        return "📝 備註已記下。下次練這個部位前用 /下次 就會提醒你！"
+        return f"📝 備註已記下。下次練這個部位前用 /下次 就會提醒你！\n\n{_today_intake_summary()}"
     except Exception:
         logger.exception("Failed to save workout notes")
         clear_session(user_id)
         return "備註儲存失敗，但運動紀錄已儲存 ✅"
+
+
+async def handle_notes_skip(user_id: str) -> str:
+    """User chose to skip notes — clear session and show today's summary."""
+    from app.line.commands.meal import _today_intake_summary
+    clear_session(user_id)
+    return f"好，這次不記備註。\n\n{_today_intake_summary()}"
 
 
 async def _parse_exercise_list(text: str, workout_type: str) -> list[dict]:
