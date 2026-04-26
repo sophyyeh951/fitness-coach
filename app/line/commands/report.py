@@ -117,6 +117,23 @@ async def handle_weekly_report() -> str:
     avg_kcal_7d = sum(m.get("total_calories", 0) or 0 for m in this_week["meals"]) / 7
     avg_protein_7d = sum(m.get("protein", 0) or 0 for m in this_week["meals"]) / 7
 
+    # Diet block — lead with deficit (the recomp signal), intake/protein as detail.
+    # Skip the deficit line when no meals logged (avg_deficit would be 0 from
+    # zero divisor, not a meaningful "no deficit" signal).
+    diet_lines: list[str] = []
+    if this_week["days_with_meals"] > 0:
+        avg_def = this_week["avg_deficit"]
+        label = "赤字" if avg_def >= 0 else "盈餘"
+        diet_lines.append(
+            f"🍽 飲食：平均{label} {abs(avg_def):.0f}kcal/天"
+            f"（目標赤字 {weekly_lens.DAILY_DEFICIT}）"
+        )
+        diet_lines.append(
+            f"        攝取 {avg_kcal_7d:.0f}kcal｜蛋白質 {avg_protein_7d:.0f}g"
+        )
+    else:
+        diet_lines.append("🍽 飲食：本週沒有飲食記錄")
+
     metrics = this_week["metrics"]
     body_lines = [
         line for line in (
@@ -129,7 +146,7 @@ async def handle_weekly_report() -> str:
     lines = [
         f"📊 近7天總結 {start.strftime('%m/%d')}–{today.strftime('%m/%d')}\n",
         f"💪 運動：{this_week['non_rest_count']}次（{workout_str}）",
-        f"🍽 飲食：平均 {avg_kcal_7d:.0f}kcal/天｜蛋白質平均 {avg_protein_7d:.0f}g",
+        *diet_lines,
     ]
     if body_lines:
         lines.append("⚖️ 身體：")
