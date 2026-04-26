@@ -11,6 +11,7 @@ from google.genai import types
 from app.config import GEMINI_API_KEY, today_tw
 from app.ai.prompts import DAILY_SUMMARY_PROMPT
 from app.db import queries as db
+from app.reports.coach_lens import pick_coach_lens
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,17 @@ async def generate_daily_summary(target_date: date | None = None) -> str:
     from app.ai.coach import _build_profile_context
     user_profile = _build_profile_context()
 
+    # Pick today's salient angle for the 教練說 line
+    recent_summaries = db.get_daily_summaries_range(
+        target_date - timedelta(days=7), target_date - timedelta(days=1),
+    )
+    coach_lens = pick_coach_lens(
+        today_meals=meals,
+        today_workouts=workouts,
+        today_metrics=today_metrics[-1] if today_metrics else None,
+        recent_summaries=recent_summaries,
+    ) or "（今日無特別異常 — 給一句具體當日觀察即可，不要重複數字）"
+
     # Generate with AI
     prompt = DAILY_SUMMARY_PROMPT.format(
         user_profile=user_profile,
@@ -116,6 +128,7 @@ async def generate_daily_summary(target_date: date | None = None) -> str:
         workout_summary=workout_summary,
         body_data=body_data,
         goal_info=goal_info,
+        coach_lens=coach_lens,
     )
 
     response = await client.aio.models.generate_content(
