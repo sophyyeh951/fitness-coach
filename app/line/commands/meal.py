@@ -141,7 +141,7 @@ def _today_intake_summary() -> str:
         if workouts:
             all_types = " ".join(w.get("workout_type", "") for w in workouts)
             if any(k in all_types for k in ["休息"]):
-                ex_est, ex_label = 0, "休息日"
+                ex_est, ex_label = 0, "休息"
             elif any(k in all_types for k in ["羽球", "打球"]):
                 ex_est, ex_label = 550, "羽球"
             elif any(k in all_types for k in ["游泳"]):

@@ -7,6 +7,22 @@ from app.line.confirm import MEAL_SENTINELS
 
 
 @pytest.mark.asyncio
+async def test_today_intake_summary_rest_day_label_no_duplicate_ri():
+    """Rest-day burn label must not contain 「日日」(休息日 + 日 suffix bug)."""
+    with patch("app.line.commands.meal.db") as mock_db:
+        mock_db.get_meals_for_date.return_value = []
+        mock_db.get_workouts_for_date.return_value = [
+            {"workout_type": "休息", "estimated_calories": 0}
+        ]
+        mock_db.get_body_metrics_range.return_value = []
+        from app.line.commands.meal import _today_intake_summary
+        out = _today_intake_summary()
+
+    assert "日日" not in out
+    assert "休息日" in out  # still labels it as a rest day
+
+
+@pytest.mark.asyncio
 async def test_start_meal_flow_returns_meal_type_prompt():
     with patch("app.line.session.supabase"):
         from app.line.commands.meal import start_meal_flow

@@ -35,7 +35,7 @@ def protein_status_line(total_protein: float) -> str:
 def _exercise_estimate(planned: str | None) -> tuple[int, str]:
     """Return (estimated_active_kcal, label) from today's planned exercise."""
     if not planned:
-        return 0, "休息日"
+        return 0, "休息"
     p = planned
     if any(k in p for k in ["羽球", "打球"]):
         return 550, "羽球"
@@ -46,7 +46,7 @@ def _exercise_estimate(planned: str | None) -> tuple[int, str]:
     if any(k in p for k in ["重訓", "訓練", "健身"]):
         return 300, "重訓"
     if any(k in p for k in ["休息"]):
-        return 0, "休息日"
+        return 0, "休息"
     return 300, "運動"
 
 
@@ -142,7 +142,7 @@ async def handle_today() -> str:
         if workouts:
             all_types = " ".join(w.get("workout_type", "") for w in workouts)
             if any(k in all_types for k in ["休息"]):
-                exercise_est, exercise_label = 0, "休息日"
+                exercise_est, exercise_label = 0, "休息"
             elif any(k in all_types for k in ["羽球", "打球"]):
                 exercise_est, exercise_label = 550, "羽球"
             elif any(k in all_types for k in ["游泳"]):
