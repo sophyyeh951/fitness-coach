@@ -118,7 +118,7 @@ def _today_intake_summary() -> str:
     from app.config import today_tw
     from app.db.schedule import get_today_exercise
     from app.line.commands.today import (
-        _exercise_estimate, BASE_TDEE, DAILY_DEFICIT,
+        _burn_from_workouts, _exercise_estimate, BASE_TDEE, DAILY_DEFICIT,
         calc_intake_target, protein_status_line,
     )
 
@@ -139,17 +139,7 @@ def _today_intake_summary() -> str:
         burn_label = f"實際消耗 {total_burn:.0f}kcal"
     else:
         if workouts:
-            all_types = " ".join(w.get("workout_type", "") for w in workouts)
-            if any(k in all_types for k in ["休息"]):
-                ex_est, ex_label = 0, "休息"
-            elif any(k in all_types for k in ["羽球", "打球"]):
-                ex_est, ex_label = 550, "羽球"
-            elif any(k in all_types for k in ["游泳"]):
-                ex_est, ex_label = 500, "游泳"
-            elif any(k in all_types for k in ["跑步", "有氧"]):
-                ex_est, ex_label = 500, "有氧"
-            else:
-                ex_est, ex_label = 300, "重訓"
+            ex_est, ex_label = _burn_from_workouts(workouts)
         else:
             planned = get_today_exercise(today)
             ex_est, ex_label = _exercise_estimate(planned)

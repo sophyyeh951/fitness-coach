@@ -32,6 +32,42 @@ def protein_status_line(total_protein: float) -> str:
     return "🥩 蛋白質達標 🎯"
 
 
+_TYPE_ESTIMATES = (
+    (("羽球", "打球"), 550, "羽球"),
+    (("游泳",),       500, "游泳"),
+    (("跑步", "有氧"), 500, "有氧"),
+)
+
+
+def _classify_workout_type(wtype: str) -> tuple[int, str]:
+    for keys, est, label in _TYPE_ESTIMATES:
+        if any(k in wtype for k in keys):
+            return est, label
+    return 300, "重訓"
+
+
+def _burn_from_workouts(workouts: list[dict]) -> tuple[int, str]:
+    """Return (estimated_active_kcal, short_label) from today's recorded workouts.
+
+    Sums each non-rest workout's `estimated_calories` (DB-recorded), falling back
+    to a type-based estimate when missing. Label is the most recent non-rest
+    workout's type. All-rest returns (0, '休息').
+    """
+    active = [w for w in workouts if "休息" not in (w.get("workout_type") or "")]
+    if not active:
+        return 0, "休息"
+
+    total = 0
+    for w in active:
+        kcal = w.get("estimated_calories")
+        if not kcal:
+            kcal, _ = _classify_workout_type(w.get("workout_type") or "")
+        total += kcal
+
+    _, label = _classify_workout_type(active[-1].get("workout_type") or "")
+    return int(total), label
+
+
 def _exercise_estimate(planned: str | None) -> tuple[int, str]:
     """Return (estimated_active_kcal, label) from today's planned exercise."""
     if not planned:
@@ -140,17 +176,7 @@ async def handle_today() -> str:
     else:
         # Priority 2: recorded workout for today (overrides schedule)
         if workouts:
-            all_types = " ".join(w.get("workout_type", "") for w in workouts)
-            if any(k in all_types for k in ["休息"]):
-                exercise_est, exercise_label = 0, "休息"
-            elif any(k in all_types for k in ["羽球", "打球"]):
-                exercise_est, exercise_label = 550, "羽球"
-            elif any(k in all_types for k in ["游泳"]):
-                exercise_est, exercise_label = 500, "游泳"
-            elif any(k in all_types for k in ["跑步", "有氧"]):
-                exercise_est, exercise_label = 500, "有氧"
-            else:
-                exercise_est, exercise_label = 300, "重訓"
+            exercise_est, exercise_label = _burn_from_workouts(workouts)
         else:
             # Priority 3: scheduled plan (no workout recorded yet)
             from app.db.schedule import get_today_exercise
