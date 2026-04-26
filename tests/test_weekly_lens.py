@@ -123,11 +123,46 @@ def test_workout_lens_includes_weight_progression_when_overlap_exists():
 
 
 def test_diet_lens_uses_per_day_actual_deficit():
-    this_week = _wk(days_with_meals=7, avg_kcal=1381, avg_deficit=250, days_protein_met=7)
+    this_week = _wk(days_with_meals=7, avg_kcal=1381, avg_deficit=250, days_protein_met=4)
     last_week = _wk(days_with_meals=7, avg_kcal=1500, avg_deficit=80, days_protein_met=4)
     out = weekly_lens.pick_diet_lens(this_week, last_week)
     assert "+250" in out  # actual deficit, not naive (avg - TDEE)
-    assert "已考慮羽球/重訓的消耗" in out  # rationale visible to AI
+
+
+def test_diet_lens_classifies_in_range_deficit_as_on_target():
+    # 316 was the real-world example that AI was flagging as 過大
+    this_week = _wk(days_with_meals=7, avg_deficit=316, days_protein_met=4)
+    last_week = _wk(days_with_meals=7, avg_deficit=200, days_protein_met=4)
+    out = weekly_lens.pick_diet_lens(this_week, last_week)
+    assert "達標" in out
+    assert "禁止解讀為過大或不足" in out
+
+
+def test_diet_lens_classifies_high_deficit_as_excess():
+    this_week = _wk(days_with_meals=7, avg_deficit=500, days_protein_met=4)
+    last_week = _wk(days_with_meals=7, avg_deficit=400, days_protein_met=4)
+    out = weekly_lens.pick_diet_lens(this_week, last_week)
+    assert "偏高" in out
+    assert "流失肌肉" in out
+
+
+def test_diet_lens_classifies_low_deficit_as_insufficient():
+    this_week = _wk(days_with_meals=7, avg_deficit=80, days_protein_met=4)
+    last_week = _wk(days_with_meals=7, avg_deficit=100, days_protein_met=4)
+    out = weekly_lens.pick_diet_lens(this_week, last_week)
+    assert "偏低" in out
+    assert "進度慢" in out
+
+
+def test_diet_lens_pivots_to_forward_looking_when_both_on_target():
+    # User's actual scenario: 316 deficit (達標) + 7/7 protein (perfect)
+    this_week = _wk(days_with_meals=7, avg_deficit=316, days_protein_met=7)
+    last_week = _wk(days_with_meals=7, avg_deficit=300, days_protein_met=7)
+    out = weekly_lens.pick_diet_lens(this_week, last_week)
+    assert "前瞻性" in out
+    assert "不要硬挑毛病" in out
+    # Should NOT contain "改進空間較大" — that's the problem-finding directive
+    assert "改進空間較大" not in out
 
 
 def test_day_burn_prefers_apple_watch_active_calories():

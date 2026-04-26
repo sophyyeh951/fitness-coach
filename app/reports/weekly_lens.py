@@ -19,8 +19,22 @@ logger = logging.getLogger(__name__)
 PROTEIN_MIN = 90
 BASE_TDEE = 1483
 DAILY_DEFICIT = 300
+DEFICIT_TOLERANCE = 100  # kcal, ±this from target deficit counts as on-target
 WEIGHT_NOISE = 0.3   # kg, ±this is treated as scale fluctuation
 BF_NOISE = 0.5       # %, ±this is treated as measurement noise
+
+
+def _classify_deficit(avg_def: float) -> str:
+    """Bucket avg deficit relative to target. AI uses the label verbatim
+    instead of forming its own opinion — prevents 316 vs 300 being framed
+    as 過大 when it's well within measurement noise."""
+    if avg_def < 0:
+        return "盈餘"
+    if abs(avg_def - DAILY_DEFICIT) <= DEFICIT_TOLERANCE:
+        return "達標"
+    if avg_def > DAILY_DEFICIT + DEFICIT_TOLERANCE:
+        return "偏高"
+    return "偏低"
 
 
 def _day_burn(active_cal: float, day_workouts: list[dict]) -> float:
@@ -199,7 +213,13 @@ def pick_workout_lens(this_week: dict, last_week: dict) -> str:
 def pick_diet_lens(this_week: dict, last_week: dict) -> str:
     """Q2 = C — give AI both calorie and protein angles, let it pick.
     Uses per-day actual burn (TDEE + activity) so badminton/training days
-    aren't penalized as 'over-target'."""
+    aren't penalized as 'over-target'.
+
+    Calorie status is classified deterministically (達標/偏高/偏低/盈餘) with
+    a ±100kcal tolerance band so 316-vs-300 doesn't read as 過大. When both
+    calorie and protein are on-target, directive flips to forward-looking
+    advice instead of fishing for problems.
+    """
     days = this_week["days_with_meals"]
     if days == 0:
         return ""
@@ -207,6 +227,9 @@ def pick_diet_lens(this_week: dict, last_week: dict) -> str:
     avg = this_week["avg_kcal"]
     avg_def = this_week["avg_deficit"]
     pro_met = this_week["days_protein_met"]
+    deficit_status = _classify_deficit(avg_def)
+    calorie_on_target = deficit_status == "達標"
+    protein_perfect = pro_met == days
 
     delta_label = ""
     if last_week["days_with_meals"]:
@@ -214,18 +237,43 @@ def pick_diet_lens(this_week: dict, last_week: dict) -> str:
         sign = "+" if d > 0 else ""
         delta_label = f"（上週 {last_week['avg_kcal']:.0f}，{sign}{d:.0f}）"
 
-    protein_perfect = pro_met == days
-
-    return (
+    base = (
         f"本週飲食記錄 {days}/7 天，平均攝取 {avg:.0f}kcal{delta_label}。"
-        f"逐日實際赤字平均 {avg_def:+.0f}kcal/天（目標赤字 {DAILY_DEFICIT}）— "
-        f"這個赤字是用「TDEE {BASE_TDEE} + 當天活動」算出來的，已考慮羽球/重訓的消耗。"
+        f"逐日實際赤字平均 {avg_def:+.0f}kcal/天（目標赤字 {DAILY_DEFICIT}±{DEFICIT_TOLERANCE}）。"
+        f"赤字狀態：**{deficit_status}**（系統已分類，請直接採用此 label，"
+        f"不要自行解讀為「過大」「過小」等其他詞）。"
         f"蛋白質達標 {pro_met}/{days} 天（≥{PROTEIN_MIN}g）。"
-        "→ 挑「熱量赤字是否合適 recomp」與「蛋白質達標」其中**改進空間較大**的那一個面向講。"
-        f"{'蛋白質本週 100% 達標，請改聚焦熱量面向，不要恭維蛋白質。' if protein_perfect else ''}"
-        "禁止輸出『多攝取 XX、YY 等優質蛋白』這種泛泛食材推薦；"
-        "若聚焦熱量，要點名「赤字過大會掉肌」或「赤字不足進度慢」這種具體 trade-off。"
     )
+
+    if calorie_on_target and protein_perfect:
+        return base + (
+            "→ 兩面向都達標。請給一句**前瞻性**建議，例如「連續 X 週達標，"
+            "下個進化方向是 Y」、「資料夠了可以提高赤字試試 recomp 加速」、"
+            "或「維持這個節奏 X 週後可看到 Y」。**不要恭維、不要罐頭話、"
+            "不要硬挑毛病講赤字偏高/偏低**。"
+        )
+
+    instructions = []
+    if protein_perfect:
+        instructions.append("蛋白質本週 100% 達標，**請改聚焦熱量面向**，不要恭維蛋白質。")
+    if calorie_on_target:
+        instructions.append(
+            "熱量赤字達標（在 ±100kcal 容忍範圍內），**禁止解讀為過大或不足**，"
+            "請改聚焦蛋白質面向。"
+        )
+    if deficit_status == "偏高":
+        instructions.append("赤字偏高（>400kcal/天），請點名「赤字過大會流失肌肉」。")
+    elif deficit_status == "偏低":
+        instructions.append("赤字偏低（<200kcal/天），請點名「赤字不足進度慢」。")
+    elif deficit_status == "盈餘":
+        instructions.append("本週是盈餘（淨吃進熱量），請點名「會增脂」並建議微調。")
+
+    pick_rule = (
+        "→ 從「熱量赤字」與「蛋白質達標」其中**改進空間較大**的那一個面向講，"
+        "給一句具體建議。" + " ".join(instructions) +
+        "禁止輸出『多攝取 XX、YY 等優質蛋白』這種泛泛食材推薦。"
+    )
+    return base + pick_rule
 
 
 def _delta(records: list[float]) -> float | None:
