@@ -26,6 +26,8 @@ Apple Watch 數據每天自動同步，無需手動傳"""
 
 async def handle_rest(reason: str, user_id: str) -> str:
     """Log a rest day immediately (no confirm needed — low stakes)."""
+    from app.line.commands.meal import _today_intake_summary
+
     notes = f"休息日{f'：{reason}' if reason else ''}"
     try:
         db.insert_workout(
@@ -35,7 +37,8 @@ async def handle_rest(reason: str, user_id: str) -> str:
             estimated_calories=0,
             notes=notes,
         )
-        return f"✅ 已記錄今天是休息日。{f'（{reason}）' if reason else ''}\n好好恢復！"
+        head = f"✅ 已記錄今天是休息日。{f'（{reason}）' if reason else ''}\n好好恢復！"
+        return f"{head}\n\n{_today_intake_summary()}"
     except Exception:
         logger.exception("Failed to save rest day")
         return "休息日記錄失敗 🙏"

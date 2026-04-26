@@ -48,6 +48,9 @@ async def test_handle_meal_confirm_saves_and_clears_session():
     with patch("app.line.commands.meal.db") as mock_db, \
          patch("app.line.commands.meal.clear_session") as mock_clear:
         mock_db.insert_meal.return_value = {"id": 42}
+        mock_db.get_meals_for_date.return_value = []
+        mock_db.get_workouts_for_date.return_value = []
+        mock_db.get_body_metrics_range.return_value = []
         from app.line.commands.meal import handle_meal_confirm
         result = await handle_meal_confirm(draft, "U123")
 
