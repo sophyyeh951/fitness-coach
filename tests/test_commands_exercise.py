@@ -20,7 +20,7 @@ async def test_handle_notes_input_appends_today_summary():
         result = await handle_notes_input("感覺不錯", {}, "U123")
 
     assert "備註已記下" in result
-    assert "建議攝取" in result
+    assert "目標攝取" in result
 
 
 @pytest.mark.asyncio
@@ -37,7 +37,7 @@ async def test_handle_notes_skip_appends_today_summary():
         result = await handle_notes_skip("U123")
 
     assert "不記備註" in result
-    assert "建議攝取" in result
+    assert "目標攝取" in result
 
 
 @pytest.mark.asyncio

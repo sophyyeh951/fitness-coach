@@ -32,7 +32,7 @@ async def test_handle_rest_appends_today_intake_summary():
         result = await handle_rest("", "U123")
 
     assert "已記錄今天是休息日" in result
-    assert "建議攝取" in result
+    assert "目標攝取" in result
     assert "1300" in result  # MIN_DAILY_TARGET on rest day
 
 

@@ -19,7 +19,7 @@ async def test_today_intake_summary_rest_day_label_no_duplicate_ri():
         out = _today_intake_summary()
 
     assert "日日" not in out
-    assert "休息日" in out  # still labels it as a rest day
+    assert "1300" in out  # MIN_DAILY_TARGET — rest-day floor confirms it's treated as rest
 
 
 @pytest.mark.asyncio

@@ -172,34 +172,29 @@ async def handle_today() -> str:
     actual_active = (metrics[-1].get("active_calories") or 0) if metrics else 0
     if actual_active > 0:
         total_burn = BASE_TDEE + actual_active
-        lines.append(f"🔥 實際消耗：{total_burn:.0f}kcal（基底{BASE_TDEE} + 活動{actual_active:.0f}）")
+        breakdown = f"基底{BASE_TDEE} + 活動{actual_active:.0f}"
     else:
-        # Priority 2: recorded workout for today (overrides schedule)
+        # Priority 2: recorded workout (overrides schedule). Priority 3: schedule.
         if workouts:
             exercise_est, exercise_label = _burn_from_workouts(workouts)
         else:
-            # Priority 3: scheduled plan (no workout recorded yet)
             from app.db.schedule import get_today_exercise
             planned = get_today_exercise(today)
             exercise_est, exercise_label = _exercise_estimate(planned)
-
         total_burn = BASE_TDEE + exercise_est
-        lines.append(f"🔥 預估消耗：{total_burn:.0f}kcal（基底{BASE_TDEE} + {exercise_label}~{exercise_est}）")
+        breakdown = f"基底{BASE_TDEE} + {exercise_label}~{exercise_est}"
 
-    # Intake target (TDEE − 300 deficit, floored)
     target = calc_intake_target(total_burn)
-    lines.append(f"🎯 建議攝取 {target:.0f}kcal（赤字 {DAILY_DEFICIT}）")
 
-    # Balance against target
+    # Single-line summary with all key numbers; breakdown on a small second line.
+    head_parts = [f"🔥 消耗 {total_burn:.0f}", f"🎯 目標攝取 {target:.0f}"]
     if total_kcal > 0:
         remaining = target - total_kcal
         if remaining > 0:
-            lines.append(f"→ 還可以吃 {remaining:.0f}kcal")
+            head_parts.append(f"還可以吃 {remaining:.0f}kcal")
         else:
-            lines.append(f"→ 已超出目標 {abs(remaining):.0f}kcal")
-        # Informational deficit vs actual burn
-        balance = total_burn - total_kcal
-        if balance > 0:
-            lines.append(f"  （實際赤字 {balance:.0f}kcal）")
+            head_parts.append(f"已超出 {abs(remaining):.0f}kcal")
+    lines.append("｜".join(head_parts))
+    lines.append(f"   （{breakdown}，赤字 {DAILY_DEFICIT}）")
 
     return "\n".join(lines)
