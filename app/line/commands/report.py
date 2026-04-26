@@ -5,10 +5,9 @@ Also triggered automatically every Sunday at 20:00 Taiwan time.
 """
 
 from __future__ import annotations
-from collections import Counter
 from datetime import timedelta
-from app.db import queries as db
 from app.config import today_tw
+from app.reports import weekly_lens
 
 
 def _rows_with(metrics: list[dict], key: str) -> list[dict]:
@@ -56,27 +55,18 @@ async def handle_weekly_report() -> str:
     today = today_tw()
     start = today - timedelta(days=6)
 
-    meals_all = []
-    workouts_all = []
-    for i in range(7):
-        day = start + timedelta(days=i)
-        meals_all.extend(db.get_meals_for_date(day))
-        workouts_all.extend(db.get_workouts_for_date(day))
+    this_week = weekly_lens.collect_week(start, today)
+    last_week = weekly_lens.collect_week(start - timedelta(days=7), today - timedelta(days=7))
 
-    metrics = db.get_body_metrics_range(start, today)
+    # Workout summary
+    breakdown = this_week["workout_breakdown"]
+    workout_str = "　".join(f"{t}x{c}" for t, c in breakdown.items()) if breakdown else "無"
 
-    # Workout summary — exclude any rest variant ("休息", "休息日", …)
-    non_rest = [w for w in workouts_all if "休息" not in (w.get("workout_type") or "")]
-    type_counts = Counter(w.get("workout_type", "") for w in non_rest)
-    workout_str = "　".join(f"{t}x{c}" for t, c in type_counts.items()) if type_counts else "無"
+    # Diet summary — average over the full 7 days (matches existing behavior)
+    avg_kcal_7d = sum(m.get("total_calories", 0) or 0 for m in this_week["meals"]) / 7
+    avg_protein_7d = sum(m.get("protein", 0) or 0 for m in this_week["meals"]) / 7
 
-    # Diet summary
-    if meals_all:
-        avg_kcal = sum(m.get("total_calories", 0) for m in meals_all) / 7
-        avg_protein = sum(m.get("protein", 0) for m in meals_all) / 7
-    else:
-        avg_kcal = avg_protein = 0
-
+    metrics = this_week["metrics"]
     body_lines = [
         line for line in (
             _body_line("體重", _rows_with(metrics, "weight"), "weight", mass_first=False),
@@ -87,11 +77,20 @@ async def handle_weekly_report() -> str:
 
     lines = [
         f"📊 近7天總結 {start.strftime('%m/%d')}–{today.strftime('%m/%d')}\n",
-        f"💪 運動：{len(non_rest)}次（{workout_str}）",
-        f"🍽 飲食：平均 {avg_kcal:.0f}kcal/天｜蛋白質平均 {avg_protein:.0f}g",
+        f"💪 運動：{this_week['non_rest_count']}次（{workout_str}）",
+        f"🍽 飲食：平均 {avg_kcal_7d:.0f}kcal/天｜蛋白質平均 {avg_protein_7d:.0f}g",
     ]
     if body_lines:
         lines.append("⚖️ 身體：")
         lines.extend(f"  • {b}" for b in body_lines)
+
+    # AI insight block — Q4 = A: omit on failure so user notices Gemini is down
+    insight = await weekly_lens.generate_weekly_insight(
+        weekly_lens.pick_workout_lens(this_week, last_week),
+        weekly_lens.pick_diet_lens(this_week, last_week),
+        weekly_lens.pick_body_lens(this_week, last_week),
+    )
+    if insight:
+        lines.append(f"\n🧠 教練說：\n{insight}")
 
     return "\n".join(lines)
