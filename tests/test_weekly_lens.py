@@ -15,8 +15,10 @@ def _wk(
     workout_breakdown: Counter | None = None,
     days_with_meals: int = 0,
     avg_kcal: float = 0.0,
+    avg_deficit: float = 0.0,
     days_protein_met: int = 0,
     metrics: list[dict] | None = None,
+    max_weight_per_exercise: dict | None = None,
 ) -> dict:
     return {
         "meals": [],
@@ -28,7 +30,9 @@ def _wk(
         "workout_breakdown": workout_breakdown or Counter(),
         "days_with_meals": days_with_meals,
         "avg_kcal": avg_kcal,
+        "avg_deficit": avg_deficit,
         "days_protein_met": days_protein_met,
+        "max_weight_per_exercise": max_weight_per_exercise or {},
     }
 
 
@@ -101,6 +105,54 @@ def test_body_lens_empty_when_no_metrics():
     this_week = _wk(metrics=[])
     last_week = _wk(metrics=[])
     assert weekly_lens.pick_body_lens(this_week, last_week) == ""
+
+
+def test_workout_lens_includes_weight_progression_when_overlap_exists():
+    this_week = _wk(
+        actual_strength=4, planned_strength=4, non_rest_count=4,
+        max_weight_per_exercise={"硬舉": 40, "肩推": 6, "深蹲": 50},
+    )
+    last_week = _wk(
+        actual_strength=3, planned_strength=4,
+        max_weight_per_exercise={"硬舉": 36, "肩推": 6, "深蹲": 45},
+    )
+    out = weekly_lens.pick_workout_lens(this_week, last_week)
+    assert "重量進步" in out
+    assert "硬舉" in out and "36" in out and "40" in out  # biggest gainer surfaces
+    assert "肩推 持平" in out  # zero-delta wording
+
+
+def test_diet_lens_uses_per_day_actual_deficit():
+    this_week = _wk(days_with_meals=7, avg_kcal=1381, avg_deficit=250, days_protein_met=7)
+    last_week = _wk(days_with_meals=7, avg_kcal=1500, avg_deficit=80, days_protein_met=4)
+    out = weekly_lens.pick_diet_lens(this_week, last_week)
+    assert "+250" in out  # actual deficit, not naive (avg - TDEE)
+    assert "已考慮羽球/重訓的消耗" in out  # rationale visible to AI
+
+
+def test_day_burn_prefers_apple_watch_active_calories():
+    # Has watch data + workout estimate — watch wins (no double-count)
+    burn = weekly_lens._day_burn(
+        active_cal=400,
+        day_workouts=[{"workout_type": "羽球", "estimated_calories": 300}],
+    )
+    assert burn == weekly_lens.BASE_TDEE + 400
+
+
+def test_day_burn_falls_back_to_workout_estimate():
+    burn = weekly_lens._day_burn(
+        active_cal=0,
+        day_workouts=[{"workout_type": "羽球", "estimated_calories": 300}],
+    )
+    assert burn == weekly_lens.BASE_TDEE + 300
+
+
+def test_day_burn_excludes_rest_workouts():
+    burn = weekly_lens._day_burn(
+        active_cal=0,
+        day_workouts=[{"workout_type": "休息日", "estimated_calories": 0}],
+    )
+    assert burn == weekly_lens.BASE_TDEE
 
 
 @pytest.mark.asyncio

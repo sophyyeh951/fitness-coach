@@ -23,11 +23,40 @@ WEIGHT_NOISE = 0.3   # kg, ±this is treated as scale fluctuation
 BF_NOISE = 0.5       # %, ±this is treated as measurement noise
 
 
+def _day_burn(active_cal: float, day_workouts: list[dict]) -> float:
+    """Per-day total burn = TDEE + activity. Mirrors today.py:
+    prefer Apple-Watch active_calories; fall back to summed workout estimates."""
+    if active_cal and active_cal > 0:
+        return BASE_TDEE + active_cal
+    workout_est = sum(
+        (w.get("estimated_calories") or 0)
+        for w in day_workouts
+        if "休息" not in (w.get("workout_type") or "")
+    )
+    return BASE_TDEE + workout_est
+
+
+def _max_weight_per_exercise(workouts: list[dict]) -> dict[str, float]:
+    """Map exercise name → max weight_kg seen across given workouts.
+    Used for week-over-week strength progression comparison."""
+    out: dict[str, float] = {}
+    for w in workouts:
+        for ex in w.get("exercises") or []:
+            name = (ex.get("name") or "").strip()
+            wt = ex.get("weight_kg")
+            if not name or not wt:
+                continue
+            if wt > out.get(name, 0):
+                out[name] = wt
+    return out
+
+
 def collect_week(start: date, end: date) -> dict:
     """Aggregate one inclusive 7-day window into the stats lenses need.
 
     Pulls meals/workouts day-by-day so per-day stats (protein-met streak,
-    avg-only-on-logged-days) stay accurate when some days have no log.
+    avg-only-on-logged-days, accurate per-day burn) stay correct when some
+    days have no log.
     """
     days = [start + timedelta(days=i) for i in range((end - start).days + 1)]
 
@@ -35,6 +64,7 @@ def collect_week(start: date, end: date) -> dict:
     workouts: list[dict] = []
     by_day_kcal: dict[date, float] = {d: 0.0 for d in days}
     by_day_protein: dict[date, float] = {d: 0.0 for d in days}
+    by_day_workouts: dict[date, list[dict]] = {d: [] for d in days}
     days_with_meals: set[date] = set()
 
     for d in days:
@@ -42,6 +72,7 @@ def collect_week(start: date, end: date) -> dict:
         d_workouts = db.get_workouts_for_date(d)
         meals.extend(d_meals)
         workouts.extend(d_workouts)
+        by_day_workouts[d] = d_workouts
         for m in d_meals:
             kcal = m.get("total_calories") or 0
             protein = m.get("protein") or 0
@@ -52,6 +83,20 @@ def collect_week(start: date, end: date) -> dict:
 
     metrics = db.get_body_metrics_range(start, end)
 
+    # Per-day burn → per-day deficit. Use active_calories from body_metrics
+    # when available, otherwise fall back to workout estimated_calories.
+    active_by_day = {
+        date.fromisoformat(m["date"]): (m.get("active_calories") or 0)
+        for m in metrics
+    }
+    daily_burns: dict[date, float] = {}
+    daily_deficits: dict[date, float] = {}
+    for d in days:
+        burn = _day_burn(active_by_day.get(d, 0), by_day_workouts[d])
+        daily_burns[d] = burn
+        if d in days_with_meals:
+            daily_deficits[d] = burn - by_day_kcal[d]
+
     # Strength-day plan — count weekdays scheduled for 重訓 in this window.
     planned_strength = sum(1 for d in days if sch.get_today_exercise(d) == "重訓")
     actual_strength = sum(1 for w in workouts if w.get("workout_type") == "重訓")
@@ -61,12 +106,17 @@ def collect_week(start: date, end: date) -> dict:
 
     if days_with_meals:
         avg_kcal = sum(by_day_kcal[d] for d in days_with_meals) / len(days_with_meals)
+        avg_deficit = sum(daily_deficits.values()) / len(daily_deficits)
         days_protein_met = sum(
             1 for d in days_with_meals if by_day_protein[d] >= PROTEIN_MIN
         )
     else:
         avg_kcal = 0.0
+        avg_deficit = 0.0
         days_protein_met = 0
+
+    strength_workouts = [w for w in workouts if w.get("workout_type") == "重訓"]
+    max_weight_per_exercise = _max_weight_per_exercise(strength_workouts)
 
     return {
         "meals": meals,
@@ -78,13 +128,43 @@ def collect_week(start: date, end: date) -> dict:
         "workout_breakdown": workout_breakdown,
         "days_with_meals": len(days_with_meals),
         "avg_kcal": avg_kcal,
+        "avg_deficit": avg_deficit,
         "days_protein_met": days_protein_met,
+        "max_weight_per_exercise": max_weight_per_exercise,
     }
+
+
+def _strength_progression_summary(this_week: dict, last_week: dict) -> str:
+    """Compare max weight per exercise between weeks.
+    Returns a short Chinese string highlighting the most-changed lifts, or "" if
+    no overlap exists. Caps at 3 lifts to avoid swamping the directive."""
+    this_max = this_week["max_weight_per_exercise"]
+    last_max = last_week["max_weight_per_exercise"]
+    overlap = set(this_max) & set(last_max)
+    if not overlap:
+        return ""
+
+    changes = sorted(
+        ((name, this_max[name] - last_max[name], last_max[name], this_max[name])
+         for name in overlap),
+        key=lambda x: -abs(x[1]),
+    )[:3]
+    if not changes:
+        return ""
+
+    parts = []
+    for name, delta, prev, now in changes:
+        if delta == 0:
+            parts.append(f"{name} 持平 {now:g}kg")
+        else:
+            sign = "↑" if delta > 0 else "↓"
+            parts.append(f"{name} {prev:g}→{now:g}kg（{sign}{abs(delta):g}）")
+    return "；".join(parts)
 
 
 def pick_workout_lens(this_week: dict, last_week: dict) -> str:
     """Strength-only lens (Q1 = C). Badminton counts toward cardio but doesn't
-    drive recomp — strength frequency vs plan is the signal."""
+    drive recomp — strength frequency + weight progression are the signals."""
     done = this_week["actual_strength"]
     planned = this_week["planned_strength"]
     last_done = last_week["actual_strength"]
@@ -98,27 +178,34 @@ def pick_workout_lens(this_week: dict, last_week: dict) -> str:
         sign = "+" if delta > 0 else ""
         diff_label = f"，上週 {last_done} 次（{sign}{delta}）"
 
+    progression = _strength_progression_summary(this_week, last_week)
+    progression_label = f" 重量進步：{progression}。" if progression else ""
+
     if done >= planned:
         return (
-            f"本週重訓 {done}/{planned} 次達標{diff_label}。"
-            "→ 給一句肯定 + 一個進階方向（如重量加碼、部位平衡、或換動作刺激）。"
+            f"本週重訓 {done}/{planned} 次達標{diff_label}。{progression_label}"
+            "→ 給一句肯定。如果有重量進步資料，請點名一個進步最多或退步的動作；"
+            "若無進步資料，給一個進階方向（重量加碼、部位平衡、或換動作刺激）。"
         )
 
     miss = planned - done
     return (
-        f"本週重訓 {done}/{planned} 次（少 {miss} 次）{diff_label}。"
-        "重訓是增肌主引擎，→ 給一句具體下週安排（指定哪天哪個部位），不要罐頭話。"
+        f"本週重訓 {done}/{planned} 次（少 {miss} 次）{diff_label}。{progression_label}"
+        "重訓是增肌主引擎，→ 給一句具體下週安排（指定哪天哪個部位）。"
+        "如果有重量進步資料，可以順便提到一個值得追的動作，不要罐頭話。"
     )
 
 
 def pick_diet_lens(this_week: dict, last_week: dict) -> str:
-    """Q2 = C — give AI both calorie and protein angles, let it pick."""
+    """Q2 = C — give AI both calorie and protein angles, let it pick.
+    Uses per-day actual burn (TDEE + activity) so badminton/training days
+    aren't penalized as 'over-target'."""
     days = this_week["days_with_meals"]
     if days == 0:
         return ""
 
     avg = this_week["avg_kcal"]
-    target = BASE_TDEE - DAILY_DEFICIT
+    avg_def = this_week["avg_deficit"]
     pro_met = this_week["days_protein_met"]
 
     delta_label = ""
@@ -127,14 +214,12 @@ def pick_diet_lens(this_week: dict, last_week: dict) -> str:
         sign = "+" if d > 0 else ""
         delta_label = f"（上週 {last_week['avg_kcal']:.0f}，{sign}{d:.0f}）"
 
-    kcal_gap_vs_target = avg - target
-    kcal_vs_tdee = avg - BASE_TDEE
     protein_perfect = pro_met == days
 
     return (
-        f"本週飲食記錄 {days}/7 天，平均 {avg:.0f}kcal{delta_label}；"
-        f"目標 {target}（TDEE {BASE_TDEE} − 赤字 {DAILY_DEFICIT}）。"
-        f"實際赤字 {-kcal_vs_tdee:+.0f}kcal/天（vs 目標赤字 300）。"
+        f"本週飲食記錄 {days}/7 天，平均攝取 {avg:.0f}kcal{delta_label}。"
+        f"逐日實際赤字平均 {avg_def:+.0f}kcal/天（目標赤字 {DAILY_DEFICIT}）— "
+        f"這個赤字是用「TDEE {BASE_TDEE} + 當天活動」算出來的，已考慮羽球/重訓的消耗。"
         f"蛋白質達標 {pro_met}/{days} 天（≥{PROTEIN_MIN}g）。"
         "→ 挑「熱量赤字是否合適 recomp」與「蛋白質達標」其中**改進空間較大**的那一個面向講。"
         f"{'蛋白質本週 100% 達標，請改聚焦熱量面向，不要恭維蛋白質。' if protein_perfect else ''}"
