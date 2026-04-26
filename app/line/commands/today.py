@@ -32,10 +32,46 @@ def protein_status_line(total_protein: float) -> str:
     return "🥩 蛋白質達標 🎯"
 
 
+_TYPE_ESTIMATES = (
+    (("羽球", "打球"), 550, "羽球"),
+    (("游泳",),       500, "游泳"),
+    (("跑步", "有氧"), 500, "有氧"),
+)
+
+
+def _classify_workout_type(wtype: str) -> tuple[int, str]:
+    for keys, est, label in _TYPE_ESTIMATES:
+        if any(k in wtype for k in keys):
+            return est, label
+    return 300, "重訓"
+
+
+def _burn_from_workouts(workouts: list[dict]) -> tuple[int, str]:
+    """Return (estimated_active_kcal, short_label) from today's recorded workouts.
+
+    Sums each non-rest workout's `estimated_calories` (DB-recorded), falling back
+    to a type-based estimate when missing. Label is the most recent non-rest
+    workout's type. All-rest returns (0, '休息').
+    """
+    active = [w for w in workouts if "休息" not in (w.get("workout_type") or "")]
+    if not active:
+        return 0, "休息"
+
+    total = 0
+    for w in active:
+        kcal = w.get("estimated_calories")
+        if not kcal:
+            kcal, _ = _classify_workout_type(w.get("workout_type") or "")
+        total += kcal
+
+    _, label = _classify_workout_type(active[-1].get("workout_type") or "")
+    return int(total), label
+
+
 def _exercise_estimate(planned: str | None) -> tuple[int, str]:
     """Return (estimated_active_kcal, label) from today's planned exercise."""
     if not planned:
-        return 0, "休息日"
+        return 0, "休息"
     p = planned
     if any(k in p for k in ["羽球", "打球"]):
         return 550, "羽球"
@@ -46,7 +82,7 @@ def _exercise_estimate(planned: str | None) -> tuple[int, str]:
     if any(k in p for k in ["重訓", "訓練", "健身"]):
         return 300, "重訓"
     if any(k in p for k in ["休息"]):
-        return 0, "休息日"
+        return 0, "休息"
     return 300, "運動"
 
 
@@ -136,44 +172,29 @@ async def handle_today() -> str:
     actual_active = (metrics[-1].get("active_calories") or 0) if metrics else 0
     if actual_active > 0:
         total_burn = BASE_TDEE + actual_active
-        lines.append(f"🔥 實際消耗：{total_burn:.0f}kcal（基底{BASE_TDEE} + 活動{actual_active:.0f}）")
+        breakdown = f"基底{BASE_TDEE} + 活動{actual_active:.0f}"
     else:
-        # Priority 2: recorded workout for today (overrides schedule)
+        # Priority 2: recorded workout (overrides schedule). Priority 3: schedule.
         if workouts:
-            all_types = " ".join(w.get("workout_type", "") for w in workouts)
-            if any(k in all_types for k in ["休息"]):
-                exercise_est, exercise_label = 0, "休息日"
-            elif any(k in all_types for k in ["羽球", "打球"]):
-                exercise_est, exercise_label = 550, "羽球"
-            elif any(k in all_types for k in ["游泳"]):
-                exercise_est, exercise_label = 500, "游泳"
-            elif any(k in all_types for k in ["跑步", "有氧"]):
-                exercise_est, exercise_label = 500, "有氧"
-            else:
-                exercise_est, exercise_label = 300, "重訓"
+            exercise_est, exercise_label = _burn_from_workouts(workouts)
         else:
-            # Priority 3: scheduled plan (no workout recorded yet)
             from app.db.schedule import get_today_exercise
             planned = get_today_exercise(today)
             exercise_est, exercise_label = _exercise_estimate(planned)
-
         total_burn = BASE_TDEE + exercise_est
-        lines.append(f"🔥 預估消耗：{total_burn:.0f}kcal（基底{BASE_TDEE} + {exercise_label}~{exercise_est}）")
+        breakdown = f"基底{BASE_TDEE} + {exercise_label}~{exercise_est}"
 
-    # Intake target (TDEE − 300 deficit, floored)
     target = calc_intake_target(total_burn)
-    lines.append(f"🎯 建議攝取 {target:.0f}kcal（赤字 {DAILY_DEFICIT}）")
 
-    # Balance against target
+    # Single-line summary with all key numbers; breakdown on a small second line.
+    head_parts = [f"🔥 消耗 {total_burn:.0f}", f"🎯 目標攝取 {target:.0f}"]
     if total_kcal > 0:
         remaining = target - total_kcal
         if remaining > 0:
-            lines.append(f"→ 還可以吃 {remaining:.0f}kcal")
+            head_parts.append(f"還可以吃 {remaining:.0f}kcal")
         else:
-            lines.append(f"→ 已超出目標 {abs(remaining):.0f}kcal")
-        # Informational deficit vs actual burn
-        balance = total_burn - total_kcal
-        if balance > 0:
-            lines.append(f"  （實際赤字 {balance:.0f}kcal）")
+            head_parts.append(f"已超出 {abs(remaining):.0f}kcal")
+    lines.append("｜".join(head_parts))
+    lines.append(f"   （{breakdown}，赤字 {DAILY_DEFICIT}）")
 
     return "\n".join(lines)

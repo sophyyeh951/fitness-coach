@@ -4,6 +4,43 @@ from linebot.v3.messaging import TextMessage
 
 
 @pytest.mark.asyncio
+async def test_handle_notes_input_appends_today_summary():
+    """After saving workout notes, response should include today's running totals."""
+    with patch("app.line.commands.exercise.db") as mock_ex_db, \
+         patch("app.line.commands.meal.db") as mock_meal_db, \
+         patch("app.line.commands.exercise.clear_session"):
+        mock_ex_db.get_workouts_for_date.return_value = [{"id": 7, "notes": ""}]
+        mock_ex_db.update_workout.return_value = {"id": 7}
+        mock_meal_db.get_meals_for_date.return_value = []
+        mock_meal_db.get_workouts_for_date.return_value = [
+            {"workout_type": "重訓", "estimated_calories": None}
+        ]
+        mock_meal_db.get_body_metrics_range.return_value = []
+        from app.line.commands.exercise import handle_notes_input
+        result = await handle_notes_input("感覺不錯", {}, "U123")
+
+    assert "備註已記下" in result
+    assert "目標攝取" in result
+
+
+@pytest.mark.asyncio
+async def test_handle_notes_skip_appends_today_summary():
+    """When user skips notes, response should also include today's running totals."""
+    with patch("app.line.commands.meal.db") as mock_meal_db, \
+         patch("app.line.commands.exercise.clear_session"):
+        mock_meal_db.get_meals_for_date.return_value = []
+        mock_meal_db.get_workouts_for_date.return_value = [
+            {"workout_type": "重訓", "estimated_calories": None}
+        ]
+        mock_meal_db.get_body_metrics_range.return_value = []
+        from app.line.commands.exercise import handle_notes_skip
+        result = await handle_notes_skip("U123")
+
+    assert "不記備註" in result
+    assert "目標攝取" in result
+
+
+@pytest.mark.asyncio
 async def test_start_exercise_flow_cardio_builds_instant_confirm():
     """Cardio exercises show a confirm card immediately."""
     with patch("app.line.commands.exercise.set_session"):

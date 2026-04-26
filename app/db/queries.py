@@ -155,6 +155,19 @@ def upsert_daily_summary(summary: dict) -> dict:
     )
 
 
+def get_daily_summaries_range(start: date, end: date) -> list[dict]:
+    """Return daily_summary rows in [start, end] inclusive, ascending by date."""
+    return (
+        supabase.table("daily_summary")
+        .select("*")
+        .gte("date", start.isoformat())
+        .lte("date", end.isoformat())
+        .order("date")
+        .execute()
+        .data
+    )
+
+
 def get_daily_summary(target_date: date) -> dict | None:
     result = (
         supabase.table("daily_summary")

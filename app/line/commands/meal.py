@@ -118,7 +118,7 @@ def _today_intake_summary() -> str:
     from app.config import today_tw
     from app.db.schedule import get_today_exercise
     from app.line.commands.today import (
-        _exercise_estimate, BASE_TDEE, DAILY_DEFICIT,
+        _burn_from_workouts, _exercise_estimate, BASE_TDEE, DAILY_DEFICIT,
         calc_intake_target, protein_status_line,
     )
 
@@ -136,35 +136,25 @@ def _today_intake_summary() -> str:
     actual_active = (metrics[-1].get("active_calories") or 0) if metrics else 0
     if actual_active > 0:
         total_burn = BASE_TDEE + actual_active
-        burn_label = f"實際消耗 {total_burn:.0f}kcal"
     else:
         if workouts:
-            all_types = " ".join(w.get("workout_type", "") for w in workouts)
-            if any(k in all_types for k in ["休息"]):
-                ex_est, ex_label = 0, "休息日"
-            elif any(k in all_types for k in ["羽球", "打球"]):
-                ex_est, ex_label = 550, "羽球"
-            elif any(k in all_types for k in ["游泳"]):
-                ex_est, ex_label = 500, "游泳"
-            elif any(k in all_types for k in ["跑步", "有氧"]):
-                ex_est, ex_label = 500, "有氧"
-            else:
-                ex_est, ex_label = 300, "重訓"
+            ex_est, _ = _burn_from_workouts(workouts)
         else:
             planned = get_today_exercise(today)
-            ex_est, ex_label = _exercise_estimate(planned)
+            ex_est, _ = _exercise_estimate(planned)
         total_burn = BASE_TDEE + ex_est
-        burn_label = f"預估消耗 {total_burn:.0f}kcal（{ex_label}日）"
 
     target = calc_intake_target(total_burn)
     remaining = target - total_kcal
+    balance = (
+        f"還可以吃 {remaining:.0f}kcal" if remaining > 0
+        else f"已超出 {abs(remaining):.0f}kcal"
+    )
 
     lines = [
         f"📊 今日截至目前",
         f"攝取 {total_kcal:.0f}kcal｜P {total_protein:.0f}g / C {total_carbs:.0f}g / F {total_fat:.0f}g",
-        f"🔥 {burn_label}",
-        f"🎯 建議攝取 {target:.0f}kcal（赤字 {DAILY_DEFICIT}）",
-        f"→ 還可以吃 {remaining:.0f}kcal" if remaining > 0 else f"→ 已超出目標 {abs(remaining):.0f}kcal",
+        f"🔥 消耗 {total_burn:.0f}｜🎯 目標攝取 {target:.0f}｜{balance}",
         protein_status_line(total_protein),
     ]
 

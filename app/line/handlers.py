@@ -84,6 +84,7 @@ async def _handle_session(text: str, session: dict, user_id: str) -> str | LineT
         handle_exercise_text_input,
         handle_exercise_type_selection,
         handle_notes_input,
+        handle_notes_skip,
     )
     from app.line.commands.body import handle_body_confirm
 
@@ -130,8 +131,7 @@ async def _handle_session(text: str, session: dict, user_id: str) -> str | LineT
     # Notes prompt
     if mode == "awaiting_notes":
         if text == NOTES_SKIP_SENTINEL:
-            clear_session(user_id)
-            return "好，這次不記備註。"
+            return await handle_notes_skip(user_id)
         return await handle_notes_input(text, draft, user_id)
 
     # Body data flow
@@ -433,152 +433,6 @@ async def _handle_nutrition_label_image(image_bytes: bytes) -> str:
         logger.exception("Failed to save nutrition label meal")
 
     return format_nutrition_label(result)
-
-
-async def _today_summary() -> str:
-    """Generate today summary with meal categories, workouts, and calorie balance."""
-    today = today_tw()
-    meals = db.get_meals_for_date(today)
-    workouts = db.get_workouts_for_date(today)
-    metrics = db.get_body_metrics_range(today, today)
-
-    lines = [f"📋 {today.strftime('%Y/%m/%d')} 今日摘要\n"]
-
-    # --- Meals by category with P/C/F per meal ---
-    if meals:
-        total_cal = sum(m.get("total_calories", 0) for m in meals)
-        total_pro = sum(m.get("protein", 0) for m in meals)
-        total_carb = sum(m.get("carbs", 0) for m in meals)
-        total_fat = sum(m.get("fat", 0) for m in meals)
-
-        meal_type_label = {
-            "breakfast": "🌅 早餐",
-            "lunch": "☀️ 午餐",
-            "dinner": "🌙 晚餐",
-            "snack": "🍪 點心",
-            "other": "🍽 其他",
-        }
-
-        # Group by meal_type
-        grouped = {}
-        for m in meals:
-            mt = m.get("meal_type", "other") or "other"
-            grouped.setdefault(mt, []).append(m)
-
-        for mt_key in ["breakfast", "lunch", "dinner", "snack", "other"]:
-            if mt_key not in grouped:
-                continue
-            label = meal_type_label.get(mt_key, "🍽")
-            mt_meals = grouped[mt_key]
-            mt_cal = sum(m.get("total_calories", 0) for m in mt_meals)
-            mt_pro = sum(m.get("protein", 0) for m in mt_meals)
-            mt_carb = sum(m.get("carbs", 0) for m in mt_meals)
-            mt_fat = sum(m.get("fat", 0) for m in mt_meals)
-            # Food names with IDs for modification
-            lines.append(f"{label} {mt_cal:.0f}kcal")
-            for m in mt_meals:
-                foods = m.get("food_items", [])
-                food_names = ", ".join(f.get("name", "?") for f in foods) if foods else "?"
-                lines.append(f"  #{m['id']} {food_names}")
-            lines.append(f"  P {mt_pro:.0f}g / C {mt_carb:.0f}g / F {mt_fat:.0f}g")
-
-        lines.append(f"\n📊 攝取合計：{total_cal:.0f} kcal")
-        lines.append(f"  P {total_pro:.0f}g / C {total_carb:.0f}g / F {total_fat:.0f}g")
-    else:
-        total_cal = 0
-        total_pro = 0
-        lines.append("🍽 今天還沒記錄飲食")
-
-    # --- Workouts: list all exercises ---
-    if workouts:
-        for w in workouts:
-            wtype = w.get("workout_type", "未分類")
-            exercises = w.get("exercises", [])
-            cal = w.get("estimated_calories")
-            cal_str = f" ~{cal:.0f}kcal" if cal else ""
-            lines.append(f"\n💪 #{w['id']} {wtype}{cal_str}")
-            for ex in exercises:
-                lines.append(f"  • {ex.get('name', '?')}")
-            notes = w.get("notes")
-            if notes:
-                lines.append(f"  💭 {notes[:80]}")
-    else:
-        lines.append("\n💪 今天還沒記錄訓練")
-
-    # --- Total calorie burn (2-stage: estimate → actual) ---
-    base_tdee = 1483  # sedentary TDEE (BMR 1236 × 1.2)
-
-    # Check if we have actual Apple Watch data
-    has_actual = False
-    active_cal = 0
-    if metrics:
-        m = metrics[-1]
-        active_cal = m.get("active_calories") or 0
-        if active_cal > 0:
-            has_actual = True
-
-    if has_actual:
-        # Stage 2: actual data from Apple Watch
-        total_burn = base_tdee + active_cal
-        lines.append(f"\n🔥 總消耗：{total_burn:.0f} kcal（實際）")
-        lines.append(f"  基底 {base_tdee} + 活動 {active_cal:.0f}")
-    else:
-        # Stage 1: estimate based on workout type or today's plan
-        exercise_estimate = 0
-        exercise_label = "休息日"
-
-        # First check completed workouts
-        if workouts:
-            workout_types = [w.get("workout_type", "").lower() for w in workouts]
-            all_types = " ".join(workout_types)
-            if any(k in all_types for k in ["羽球", "有氧", "跑步", "游泳"]):
-                exercise_estimate = 550
-                exercise_label = "羽球/有氧日"
-            else:
-                exercise_estimate = 300
-                exercise_label = "重訓日"
-        else:
-            # No workout recorded yet — check context notes and recent chat for plans
-            context_notes = db.get_active_context()
-            recent_chat = db.get_recent_chat(limit=10)
-            plan_text = " ".join(
-                [n.get("content", "") for n in context_notes]
-                + [c.get("message", "") for c in recent_chat if c.get("role") == "user"]
-            ).lower()
-
-            # Check for rest day FIRST (overrides other plans)
-            if any(k in plan_text for k in ["休息日", "休息", "不運動", "沒有能量"]):
-                exercise_estimate = 0
-                exercise_label = "休息日"
-            elif any(k in plan_text for k in ["羽球", "有氧", "跑步", "游泳", "打球"]):
-                exercise_estimate = 550
-                exercise_label = "羽球/有氧日（預估）"
-            elif any(k in plan_text for k in ["重訓", "練上半身", "練臀腿", "練腿", "上半身日", "臀腿日"]):
-                exercise_estimate = 300
-                exercise_label = "重訓日（預估）"
-
-        total_burn = base_tdee + exercise_estimate
-        lines.append(f"\n🔥 預估總消耗：{total_burn:.0f} kcal")
-        lines.append(f"  基底 {base_tdee} + {exercise_label} ~{exercise_estimate}")
-
-    # --- Intake target + balance ---
-    from app.line.commands.today import (
-        calc_intake_target, protein_status_line, DAILY_DEFICIT,
-    )
-    target = calc_intake_target(total_burn)
-    lines.append(f"  🎯 建議攝取 {target:.0f} kcal（赤字 {DAILY_DEFICIT}）")
-    if total_cal > 0:
-        remaining = target - total_cal
-        if remaining > 0:
-            lines.append(f"  → 還可以吃 {remaining:.0f} kcal")
-        else:
-            lines.append(f"  → 已超出目標 {abs(remaining):.0f} kcal")
-
-    # --- Protein status ---
-    if total_cal > 0:
-        lines.append("\n" + protein_status_line(total_pro))
-
-    return "\n".join(lines)
 
 
 def _show_goal() -> str:

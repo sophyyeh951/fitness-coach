@@ -7,6 +7,22 @@ from app.line.confirm import MEAL_SENTINELS
 
 
 @pytest.mark.asyncio
+async def test_today_intake_summary_rest_day_label_no_duplicate_ri():
+    """Rest-day burn label must not contain 「日日」(休息日 + 日 suffix bug)."""
+    with patch("app.line.commands.meal.db") as mock_db:
+        mock_db.get_meals_for_date.return_value = []
+        mock_db.get_workouts_for_date.return_value = [
+            {"workout_type": "休息", "estimated_calories": 0}
+        ]
+        mock_db.get_body_metrics_range.return_value = []
+        from app.line.commands.meal import _today_intake_summary
+        out = _today_intake_summary()
+
+    assert "日日" not in out
+    assert "1300" in out  # MIN_DAILY_TARGET — rest-day floor confirms it's treated as rest
+
+
+@pytest.mark.asyncio
 async def test_start_meal_flow_returns_meal_type_prompt():
     with patch("app.line.session.supabase"):
         from app.line.commands.meal import start_meal_flow
@@ -48,6 +64,9 @@ async def test_handle_meal_confirm_saves_and_clears_session():
     with patch("app.line.commands.meal.db") as mock_db, \
          patch("app.line.commands.meal.clear_session") as mock_clear:
         mock_db.insert_meal.return_value = {"id": 42}
+        mock_db.get_meals_for_date.return_value = []
+        mock_db.get_workouts_for_date.return_value = []
+        mock_db.get_body_metrics_range.return_value = []
         from app.line.commands.meal import handle_meal_confirm
         result = await handle_meal_confirm(draft, "U123")
 
