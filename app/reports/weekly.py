@@ -10,6 +10,30 @@ from app.db import queries as db
 logger = logging.getLogger(__name__)
 
 
+def _total_volume(workouts: list[dict]) -> float:
+    """Sum weight_kg × reps × sets across all exercises in the given workouts.
+    Reps/sets default to 1 when missing so menus without full structure still count."""
+    total = 0.0
+    for w in workouts:
+        for ex in (w.get("exercises") or []):
+            weight = ex.get("weight_kg") or 0
+            reps = ex.get("reps") or 1
+            sets = ex.get("sets") or 1
+            total += float(weight) * float(reps) * float(sets)
+    return total
+
+
+def _trend_marker(this_v: float, last_v: float) -> str:
+    if last_v <= 0:
+        return ""
+    diff_pct = (this_v - last_v) / last_v * 100
+    if diff_pct >= 5:
+        return f" ↑{diff_pct:.0f}%"
+    if diff_pct <= -5:
+        return f" ↓{abs(diff_pct):.0f}%"
+    return " →"
+
+
 def generate_weekly_text(end_date: date | None = None) -> str:
     """Generate a text-based weekly summary."""
     if end_date is None:
@@ -47,6 +71,36 @@ def generate_weekly_text(end_date: date | None = None) -> str:
         current += timedelta(days=1)
 
     lines.append(f"\n💪 本週訓練 {workout_count} 次")
+
+    # Per-muscle-group comparison vs prior week.
+    # User typically hits each part once per week — compare this week's session
+    # against last week's same part.
+    prev_start = start_date - timedelta(days=7)
+    prev_end = end_date - timedelta(days=7)
+    part_lines = []
+    for group in ("胸肩", "背", "臀腿"):
+        try:
+            this_week = db.get_workouts_by_muscle_group_range(group, start_date, end_date)
+            last_week = db.get_workouts_by_muscle_group_range(group, prev_start, prev_end)
+        except Exception:
+            logger.exception("Failed to fetch muscle group %s", group)
+            continue
+        if not this_week and not last_week:
+            continue
+        this_vol = _total_volume(this_week)
+        last_vol = _total_volume(last_week)
+        marker = _trend_marker(this_vol, last_vol)
+        if this_week and last_week:
+            part_lines.append(
+                f"• {group}：{this_vol:.0f} vs 上週 {last_vol:.0f}{marker}"
+            )
+        elif this_week:
+            part_lines.append(f"• {group}：{this_vol:.0f}（上週沒練）")
+        else:
+            part_lines.append(f"• {group}：本週沒練（上週 {last_vol:.0f}）")
+    if part_lines:
+        lines.append("\n🏋️ 各部位訓練量（總重量 kg × 次數）")
+        lines.extend(part_lines)
 
     # Body composition change vs previous week
     metrics = db.get_body_metrics_range(start_date, end_date)

@@ -92,6 +92,7 @@ def insert_workout(
     duration_min: int | None = None,
     estimated_calories: float | None = None,
     notes: str | None = None,
+    muscle_group: str | None = None,
 ) -> dict:
     return (
         supabase.table("workouts")
@@ -101,9 +102,41 @@ def insert_workout(
             "duration_min": duration_min,
             "estimated_calories": estimated_calories,
             "notes": notes,
+            "muscle_group": muscle_group,
         })
         .execute()
         .data[0]
+    )
+
+
+def get_last_workout_by_muscle_group(muscle_group: str) -> dict | None:
+    """Most recent strength workout tagged with the given muscle group, or None."""
+    result = (
+        supabase.table("workouts")
+        .select("*")
+        .eq("muscle_group", muscle_group)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+        .data
+    )
+    return result[0] if result else None
+
+
+def get_workouts_by_muscle_group_range(
+    muscle_group: str, start_date: date, end_date: date
+) -> list[dict]:
+    start = datetime.combine(start_date, datetime.min.time()).isoformat()
+    end = datetime.combine(end_date, datetime.max.time()).isoformat()
+    return (
+        supabase.table("workouts")
+        .select("*")
+        .eq("muscle_group", muscle_group)
+        .gte("created_at", start)
+        .lte("created_at", end)
+        .order("created_at")
+        .execute()
+        .data
     )
 
 
