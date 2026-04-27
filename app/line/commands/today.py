@@ -3,8 +3,16 @@
 """
 
 from __future__ import annotations
+from datetime import date
 from app.db import queries as db
 from app.config import today_tw
+
+_WEEKDAY_TW = ["一", "二", "三", "四", "五", "六", "日"]
+
+
+def format_date_label(d: date) -> str:
+    """Render '4/27（週一）' for headers — quick visual scan + scrollback search."""
+    return f"{d.month}/{d.day}（週{_WEEKDAY_TW[d.weekday()]}）"
 
 BASE_TDEE = 1483          # sedentary TDEE (BMR 1236 × 1.2)
 DAILY_DEFICIT = 300       # target daily deficit for recomp
@@ -88,7 +96,7 @@ def _exercise_estimate(planned: str | None) -> tuple[int, str]:
 
 async def handle_today() -> str:
     today = today_tw()
-    lines = ["📊 今日紀錄\n"]
+    lines = [f"📊 今日紀錄 · {format_date_label(today)}\n"]
 
     # ── Meals ──────────────────────────────────────────
     meals = db.get_meals_for_date(today)
