@@ -11,8 +11,8 @@ _WEEKDAY_TW = ["一", "二", "三", "四", "五", "六", "日"]
 
 
 def format_date_label(d: date) -> str:
-    """Render '4/27（週一）' for headers — quick visual scan + scrollback search."""
-    return f"{d.month}/{d.day}（週{_WEEKDAY_TW[d.weekday()]}）"
+    """Render '2026 年 4 月 27 日 星期一' for headers — quick visual scan + scrollback search."""
+    return f"{d.year} 年 {d.month} 月 {d.day} 日 星期{_WEEKDAY_TW[d.weekday()]}"
 
 BASE_TDEE = 1483          # sedentary TDEE (BMR 1236 × 1.2)
 DAILY_DEFICIT = 300       # target daily deficit for recomp
