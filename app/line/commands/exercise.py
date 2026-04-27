@@ -24,6 +24,7 @@ from linebot.v3.messaging import MessageAction, QuickReply, QuickReplyItem, Text
 from app.db import queries as db
 from app.line.confirm import (
     CONFIRM_SENTINEL, CANCEL_SENTINEL, NOTES_SKIP_SENTINEL,
+    EXERCISE_SKIP_MENU_SENTINEL,
     EXERCISE_SENTINELS, EXERCISE_TYPE_MAP,
     build_confirm_card, build_quick_reply_prompt,
 )
@@ -105,11 +106,20 @@ async def handle_exercise_type_selection(text: str, user_id: str) -> str | TextM
             mode="awaiting_exercise_list",
             draft={"workout_type": workout_type, "exercises": []},
         )
-        return (
-            "💪 重訓\n"
-            "練完後把菜單貼過來，格式隨意：\n"
-            "例：硬舉 36kg 10x4\n"
-            "   肩推 4kg 12x3"
+        return TextMessage(
+            text=(
+                "💪 重訓\n"
+                "可以做兩件事：\n"
+                "1. 傳 Apple Watch 截圖（自動讀消耗 / 時長）\n"
+                "2. 把菜單貼過來，格式隨意：\n"
+                "   例：硬舉 36kg 10x4\n"
+                "      肩推 4kg 12x3\n\n"
+                "兩個都可以做，或只做其中一個 👇"
+            ),
+            quick_reply=QuickReply(items=[
+                QuickReplyItem(action=MessageAction(label="跳過菜單", text=EXERCISE_SKIP_MENU_SENTINEL)),
+                QuickReplyItem(action=MessageAction(label="❌ 取消", text=CANCEL_SENTINEL)),
+            ]),
         )
 
     # Cardio types wait for photo or free-text
@@ -213,20 +223,103 @@ async def handle_exercise_list_input(text: str, draft: dict, user_id: str) -> Te
     parsed_exercises = await _parse_exercise_list(text, draft.get("workout_type", ""))
     new_draft = {**draft, "exercises": parsed_exercises}
     set_session(user_id, mode="awaiting_exercise_confirm", draft=new_draft)
+    return _build_strength_confirm_card(new_draft)
+
+
+async def handle_strength_skip_menu(draft: dict, user_id: str) -> TextMessage:
+    """User skipped the menu — go straight to confirm with whatever's in draft."""
+    new_draft = {**draft, "exercises": draft.get("exercises", [])}
+    set_session(user_id, mode="awaiting_exercise_confirm", draft=new_draft)
+    return _build_strength_confirm_card(new_draft)
+
+
+async def handle_strength_photo_input(image_bytes: bytes, draft: dict, user_id: str) -> TextMessage:
+    """Apple Watch screenshot during 重訓 menu phase — extract metrics, stay in mode."""
+    from app.ai.image_analyzer import analyze_workout_photo
+
+    workout_type = draft.get("workout_type", "重訓")
+    parsed = await analyze_workout_photo(image_bytes, workout_type=workout_type)
+
+    if "error" in parsed:
+        return TextMessage(
+            text="（無法從圖片辨識 Apple Watch 數據，請改用文字告訴我，或直接貼菜單）",
+            quick_reply=QuickReply(items=[
+                QuickReplyItem(action=MessageAction(label="跳過菜單", text=EXERCISE_SKIP_MENU_SENTINEL)),
+                QuickReplyItem(action=MessageAction(label="❌ 取消", text=CANCEL_SENTINEL)),
+            ]),
+        )
+
+    duration_min = parsed.get("duration_min")
+    estimated_kcal = parsed.get("estimated_calories") or 0
+    avg_hr = parsed.get("avg_heart_rate")
+    notes = parsed.get("notes")
+
+    new_draft = {
+        **draft,
+        "duration_min": duration_min,
+        "estimated_calories": estimated_kcal,
+        "avg_heart_rate": avg_hr,
+        "photo_notes": notes,
+    }
+    set_session(user_id, mode="awaiting_exercise_list", draft=new_draft)
+
+    summary = []
+    if duration_min:
+        summary.append(f"時長 {duration_min} 分鐘")
+    if estimated_kcal:
+        summary.append(f"消耗 {estimated_kcal}kcal")
+    if avg_hr:
+        summary.append(f"心率 {avg_hr}bpm")
+    summary_str = "、".join(summary) if summary else "（未辨識到數據）"
+
+    return TextMessage(
+        text=(
+            f"⌚ 已收到：{summary_str}\n"
+            "現在把菜單貼過來，或直接「跳過菜單」存檔 👇"
+        ),
+        quick_reply=QuickReply(items=[
+            QuickReplyItem(action=MessageAction(label="跳過菜單", text=EXERCISE_SKIP_MENU_SENTINEL)),
+            QuickReplyItem(action=MessageAction(label="❌ 取消", text=CANCEL_SENTINEL)),
+        ]),
+    )
+
+
+def _build_strength_confirm_card(draft: dict) -> TextMessage:
+    """Render the 重訓 confirm card showing menu + any Apple Watch metrics."""
+    workout_type = draft.get("workout_type", "重訓")
+    exercises = draft.get("exercises") or []
+    duration_min = draft.get("duration_min")
+    kcal = draft.get("estimated_calories")
+    avg_hr = draft.get("avg_heart_rate")
 
     lines = []
-    for e in parsed_exercises:
+    for e in exercises:
         name = e.get("name", "?")
         w = e.get("weight_kg")
         weight_str = f" {w}kg" if w else ""
         reps = e.get("reps", "")
         sets = e.get("sets", "")
         lines.append(f"• {name}{weight_str} {reps}下x{sets}組")
+    if not exercises:
+        lines.append("（沒有菜單）")
+
+    if duration_min or kcal or avg_hr:
+        lines.append("")
+        lines.append("⌚ Apple Watch")
+        if duration_min:
+            lines.append(f"時長：{duration_min} 分鐘")
+        if kcal:
+            lines.append(f"消耗：{kcal}kcal")
+        if avg_hr:
+            lines.append(f"平均心率：{avg_hr}bpm")
+    else:
+        lines.append("")
+        lines.append("（沒有 Apple Watch 數據）")
 
     return build_confirm_card(
-        title=f"💪 {draft.get('workout_type', '重訓')}草稿",
-        lines=lines if lines else ["（解析失敗，請重新貼上）"],
-        total="Apple Watch 卡路里今晚自動同步",
+        title=f"💪 {workout_type}草稿",
+        lines=lines,
+        total="確認儲存嗎？",
     )
 
 
