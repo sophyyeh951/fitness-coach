@@ -119,7 +119,7 @@ def _today_intake_summary() -> str:
     from app.db.schedule import get_today_exercise
     from app.line.commands.today import (
         _burn_from_workouts, _exercise_estimate, BASE_TDEE, DAILY_DEFICIT,
-        calc_intake_target, protein_status_line,
+        calc_intake_target, protein_status_line, format_date_label,
     )
 
     today = today_tw()
@@ -152,7 +152,7 @@ def _today_intake_summary() -> str:
     )
 
     lines = [
-        f"📊 今日截至目前",
+        f"📊 今日截至目前 · {format_date_label(today)}",
         f"攝取 {total_kcal:.0f}kcal｜P {total_protein:.0f}g / C {total_carbs:.0f}g / F {total_fat:.0f}g",
         f"🔥 消耗 {total_burn:.0f}｜🎯 目標攝取 {target:.0f}｜{balance}",
         protein_status_line(total_protein),
