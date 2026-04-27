@@ -93,15 +93,74 @@ async def test_handle_exercise_type_selection_cardio_prompts_for_input():
 
 
 @pytest.mark.asyncio
-async def test_handle_exercise_type_selection_strength_branches_to_list():
+async def test_handle_exercise_type_selection_strength_asks_for_muscle_group():
     with patch("app.line.commands.exercise.set_session") as mock_set:
         from app.line.commands.exercise import handle_exercise_type_selection
         result = await handle_exercise_type_selection("__ex_strength__", "U123")
 
     args, kwargs = mock_set.call_args
+    assert kwargs["mode"] == "awaiting_muscle_group"
+    assert result.quick_reply is not None
+    labels = [item.action.label for item in result.quick_reply.items]
+    assert "胸肩" in labels
+    assert "背" in labels
+    assert "臀腿" in labels
+
+
+@pytest.mark.asyncio
+async def test_handle_muscle_group_selection_shows_last_session():
+    with patch("app.line.commands.exercise.set_session") as mock_set, \
+         patch("app.line.commands.exercise.db") as mock_db:
+        mock_db.get_last_workout_by_muscle_group.return_value = {
+            "created_at": "2026-04-20T10:00:00",
+            "exercises": [{"name": "深蹲", "weight_kg": 50, "reps": 8, "sets": 4}],
+            "notes": "膝蓋還行",
+        }
+        from app.line.commands.exercise import handle_muscle_group_selection
+        result = await handle_muscle_group_selection("__mg_legs__", "U123")
+
+    args, kwargs = mock_set.call_args
     assert kwargs["mode"] == "awaiting_exercise_list"
-    text = result.text if hasattr(result, "text") else result
-    assert "菜單" in text or "貼" in text
+    assert kwargs["draft"]["muscle_group"] == "臀腿"
+    assert kwargs["draft"]["workout_type"] == "臀腿"
+    text = result.text
+    assert "上次臀腿" in text
+    assert "深蹲" in text
+    assert "50kg" in text
+    assert "膝蓋還行" in text
+
+
+@pytest.mark.asyncio
+async def test_handle_muscle_group_selection_no_prior_session():
+    with patch("app.line.commands.exercise.set_session"), \
+         patch("app.line.commands.exercise.db") as mock_db:
+        mock_db.get_last_workout_by_muscle_group.return_value = None
+        from app.line.commands.exercise import handle_muscle_group_selection
+        result = await handle_muscle_group_selection("__mg_chest__", "U123")
+
+    text = result.text
+    assert "胸肩" in text
+    assert "下次" in text or "還沒有" in text
+
+
+@pytest.mark.asyncio
+async def test_start_exercise_flow_strength_shortcut_includes_last_session():
+    """`/動 臀腿` shortcut should also show last 臀腿 session as reference."""
+    with patch("app.line.commands.exercise.set_session") as mock_set, \
+         patch("app.line.commands.exercise.db") as mock_db:
+        mock_db.get_last_workout_by_muscle_group.return_value = {
+            "created_at": "2026-04-20T10:00:00",
+            "exercises": [{"name": "硬舉", "weight_kg": 36, "reps": 10, "sets": 4}],
+            "notes": None,
+        }
+        from app.line.commands.exercise import start_exercise_flow
+        result = await start_exercise_flow("臀腿", "U123")
+
+    args, kwargs = mock_set.call_args
+    assert kwargs["draft"]["muscle_group"] == "臀腿"
+    text = result if isinstance(result, str) else result.text
+    assert "上次臀腿" in text
+    assert "硬舉" in text
 
 
 @pytest.mark.asyncio

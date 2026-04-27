@@ -26,6 +26,7 @@ from app.line.confirm import (
     CONFIRM_SENTINEL, CANCEL_SENTINEL, NOTES_SKIP_SENTINEL,
     EXERCISE_SKIP_MENU_SENTINEL,
     EXERCISE_SENTINELS, EXERCISE_TYPE_MAP,
+    MUSCLE_GROUP_SENTINELS, MUSCLE_GROUP_MAP,
     build_confirm_card, build_quick_reply_prompt,
 )
 from app.line.session import clear_session, set_session
@@ -38,6 +39,69 @@ WEIGHT_TRAINING_KEYWORDS = ("重訓", "上半身", "臀腿", "核心", "全身",
 
 def _is_weight_training(description: str) -> bool:
     return any(kw in description for kw in WEIGHT_TRAINING_KEYWORDS)
+
+
+def _infer_muscle_group(text: str) -> str | None:
+    """Map free-text workout description to one of 胸肩 / 背 / 臀腿 / 其他.
+    Returns None if it doesn't look like a strength session at all."""
+    if not text:
+        return None
+    if any(k in text for k in ("臀", "腿", "腳", "深蹲", "硬舉")):
+        return "臀腿"
+    if "背" in text:
+        return "背"
+    if any(k in text for k in ("胸", "肩", "上半身")):
+        return "胸肩"
+    if _is_weight_training(text):
+        return "其他"
+    return None
+
+
+def _format_last_session_reference(last: dict, muscle_group: str) -> str:
+    """Render a 'last 臀腿 day' reference block to remind the user of weights/reps."""
+    last_date = (last.get("created_at") or "")[:10]
+    exercises = last.get("exercises") or []
+    notes = last.get("notes")
+
+    lines = [f"📋 上次{muscle_group}（{last_date}）"]
+    if exercises:
+        for e in exercises:
+            name = e.get("name", "?")
+            w = e.get("weight_kg")
+            weight_str = f" {w}kg" if w else ""
+            reps = e.get("reps", "")
+            sets = e.get("sets", "")
+            lines.append(f"• {name}{weight_str} {reps}下x{sets}組")
+    else:
+        lines.append("（沒有詳細菜單）")
+    if notes:
+        lines.append(f"📝 {notes}")
+    return "\n".join(lines)
+
+
+def _last_session_reference_text(muscle_group: str | None) -> str | None:
+    """Look up the last workout for this muscle group and format it as a reference block.
+    Returns None if there's no prior session to show."""
+    if not muscle_group:
+        return None
+    try:
+        last = db.get_last_workout_by_muscle_group(muscle_group)
+    except Exception:
+        logger.exception("Failed to fetch last session for %s", muscle_group)
+        return None
+    if not last:
+        return None
+    return _format_last_session_reference(last, muscle_group)
+
+
+def _strength_menu_prompt() -> str:
+    return (
+        "現在開始記今天：\n"
+        "1. 傳 Apple Watch 截圖（自動讀消耗 / 時長）\n"
+        "2. 把菜單貼過來，格式隨意：\n"
+        "   例：硬舉 36kg 10x4\n"
+        "      肩推 4kg 12x3"
+    )
 
 
 def _estimate_cardio_calories(description: str) -> int:
@@ -71,8 +135,15 @@ async def start_exercise_flow(args: str, user_id: str) -> str | TextMessage:
         )
 
     if _is_weight_training(args):
-        set_session(user_id, mode="awaiting_exercise_list", draft={"workout_type": args, "exercises": []})
-        return f"💪 {args}\n練完後把菜單貼過來，格式隨意：\n例：硬舉 36kg 10x4\n   肩推 4kg 12x3"
+        muscle_group = _infer_muscle_group(args)
+        draft = {"workout_type": args, "muscle_group": muscle_group, "exercises": []}
+        set_session(user_id, mode="awaiting_exercise_list", draft=draft)
+        header = f"💪 {args}"
+        ref = _last_session_reference_text(muscle_group) if muscle_group else None
+        prompt = "練完後把菜單貼過來，格式隨意：\n例：硬舉 36kg 10x4\n   肩推 4kg 12x3"
+        if ref:
+            return f"{header}\n\n{ref}\n\n{prompt}"
+        return f"{header}\n{prompt}"
 
     estimated_kcal = _estimate_cardio_calories(args)
     draft = {
@@ -99,27 +170,16 @@ async def handle_exercise_type_selection(text: str, user_id: str) -> str | TextM
 
     workout_type = EXERCISE_TYPE_MAP[text]
 
-    # 重訓 branches into the menu-list flow
+    # 重訓 branches: first ask for muscle group so we can show last same-part session.
     if workout_type == "重訓":
         set_session(
             user_id,
-            mode="awaiting_exercise_list",
+            mode="awaiting_muscle_group",
             draft={"workout_type": workout_type, "exercises": []},
         )
-        return TextMessage(
-            text=(
-                "💪 重訓\n"
-                "可以做兩件事：\n"
-                "1. 傳 Apple Watch 截圖（自動讀消耗 / 時長）\n"
-                "2. 把菜單貼過來，格式隨意：\n"
-                "   例：硬舉 36kg 10x4\n"
-                "      肩推 4kg 12x3\n\n"
-                "兩個都可以做，或只做其中一個 👇"
-            ),
-            quick_reply=QuickReply(items=[
-                QuickReplyItem(action=MessageAction(label="跳過菜單", text=EXERCISE_SKIP_MENU_SENTINEL)),
-                QuickReplyItem(action=MessageAction(label="❌ 取消", text=CANCEL_SENTINEL)),
-            ]),
+        return build_quick_reply_prompt(
+            text="💪 練哪個部位？",
+            options=[(label, sentinel) for label, sentinel in MUSCLE_GROUP_SENTINELS.items()],
         )
 
     # Cardio types wait for photo or free-text
@@ -132,6 +192,39 @@ async def handle_exercise_type_selection(text: str, user_id: str) -> str | TextM
         f"🏃 {workout_type}\n"
         "傳 Apple Watch 截圖，或告訴我時長／消耗 👇\n"
         "例：2小時 650kcal"
+    )
+
+
+async def handle_muscle_group_selection(text: str, user_id: str) -> str | TextMessage:
+    """User tapped a muscle-group button after picking 重訓.
+    Show last same-part session as reference, then move into the menu-list flow."""
+    if text not in MUSCLE_GROUP_MAP:
+        return build_quick_reply_prompt(
+            text="請點選下方部位 👇",
+            options=[(label, sentinel) for label, sentinel in MUSCLE_GROUP_SENTINELS.items()],
+        )
+
+    muscle_group = MUSCLE_GROUP_MAP[text]
+    set_session(
+        user_id,
+        mode="awaiting_exercise_list",
+        draft={"workout_type": muscle_group, "muscle_group": muscle_group, "exercises": []},
+    )
+
+    ref = _last_session_reference_text(muscle_group)
+    body = f"💪 {muscle_group}\n\n"
+    if ref:
+        body += f"{ref}\n\n"
+    else:
+        body += "（這個部位還沒有上次紀錄，下次就會幫你帶出來）\n\n"
+    body += _strength_menu_prompt() + "\n\n兩個都可以做，或只做其中一個 👇"
+
+    return TextMessage(
+        text=body,
+        quick_reply=QuickReply(items=[
+            QuickReplyItem(action=MessageAction(label="跳過菜單", text=EXERCISE_SKIP_MENU_SENTINEL)),
+            QuickReplyItem(action=MessageAction(label="❌ 取消", text=CANCEL_SENTINEL)),
+        ]),
     )
 
 
@@ -332,6 +425,7 @@ async def handle_exercise_confirm(draft: dict, user_id: str) -> str | TextMessag
             duration_min=draft.get("duration_min"),
             estimated_calories=draft.get("estimated_calories"),
             notes=draft.get("photo_notes"),
+            muscle_group=draft.get("muscle_group"),
         )
         clear_session(user_id)
         # Prompt for notes — skippable

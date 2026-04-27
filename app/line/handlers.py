@@ -83,6 +83,7 @@ async def _handle_session(text: str, session: dict, user_id: str) -> str | LineT
         handle_exercise_confirm,
         handle_exercise_text_input,
         handle_exercise_type_selection,
+        handle_muscle_group_selection,
         handle_notes_input,
         handle_notes_skip,
         handle_strength_skip_menu,
@@ -111,6 +112,11 @@ async def _handle_session(text: str, session: dict, user_id: str) -> str | LineT
     # Exercise flow
     if mode == "awaiting_exercise_type":
         return await handle_exercise_type_selection(text, user_id)
+    if mode == "awaiting_muscle_group":
+        if text == CANCEL_SENTINEL:
+            clear_session(user_id)
+            return "已取消，沒有儲存任何資料。"
+        return await handle_muscle_group_selection(text, user_id)
     if mode == "awaiting_exercise_input":
         return await handle_exercise_text_input(text, draft, user_id)
     if mode == "awaiting_exercise_list":

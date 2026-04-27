@@ -54,6 +54,15 @@ EXERCISE_SENTINELS = {
 }
 EXERCISE_TYPE_MAP = {v: k for k, v in EXERCISE_SENTINELS.items()}
 
+# Muscle-group selection — second step after picking 重訓.
+MUSCLE_GROUP_SENTINELS = {
+    "胸肩": "__mg_chest__",
+    "背": "__mg_back__",
+    "臀腿": "__mg_legs__",
+    "其他": "__mg_other__",
+}
+MUSCLE_GROUP_MAP = {v: k for k, v in MUSCLE_GROUP_SENTINELS.items()}
+
 DIVIDER = "━━━━━━━━━━━━━━━"
 
 
