@@ -54,10 +54,13 @@ async def _evening_summary():
     """Evening job: generate and push daily summary via LINE."""
     try:
         from app.reports.daily import generate_daily_summary
+        from app.line.commands.today import format_date_label
         from app.line.push import push_text
+        from app.config import today_tw
 
         summary = await generate_daily_summary()
-        push_text(summary)
+        header = f"📊 今日總結 · {format_date_label(today_tw())}\n\n"
+        push_text(header + summary)
         logger.info("Evening summary pushed successfully")
     except Exception:
         logger.exception("Failed to push evening summary")
