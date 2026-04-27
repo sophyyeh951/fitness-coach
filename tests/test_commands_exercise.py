@@ -100,7 +100,8 @@ async def test_handle_exercise_type_selection_strength_branches_to_list():
 
     args, kwargs = mock_set.call_args
     assert kwargs["mode"] == "awaiting_exercise_list"
-    assert "菜單" in result or "貼" in result
+    text = result.text if hasattr(result, "text") else result
+    assert "菜單" in text or "貼" in text
 
 
 @pytest.mark.asyncio

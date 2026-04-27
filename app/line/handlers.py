@@ -35,7 +35,7 @@ from app.db import queries as db
 from app.line.session import get_session, clear_session, set_session
 from app.line.confirm import (
     CONFIRM_SENTINEL, CANCEL_SENTINEL, EDIT_SENTINEL,
-    MEAL_SENTINELS, NOTES_SKIP_SENTINEL,
+    MEAL_SENTINELS, NOTES_SKIP_SENTINEL, EXERCISE_SKIP_MENU_SENTINEL,
 )
 
 logger = logging.getLogger(__name__)
@@ -85,6 +85,7 @@ async def _handle_session(text: str, session: dict, user_id: str) -> str | LineT
         handle_exercise_type_selection,
         handle_notes_input,
         handle_notes_skip,
+        handle_strength_skip_menu,
     )
     from app.line.commands.body import handle_body_confirm
 
@@ -113,6 +114,11 @@ async def _handle_session(text: str, session: dict, user_id: str) -> str | LineT
     if mode == "awaiting_exercise_input":
         return await handle_exercise_text_input(text, draft, user_id)
     if mode == "awaiting_exercise_list":
+        if text == EXERCISE_SKIP_MENU_SENTINEL:
+            return await handle_strength_skip_menu(draft, user_id)
+        if text == CANCEL_SENTINEL:
+            clear_session(user_id)
+            return "已取消，沒有儲存任何資料。"
         return await handle_exercise_list_input(text, draft, user_id)
     if mode == "awaiting_exercise_confirm":
         if text == CONFIRM_SENTINEL:
@@ -225,15 +231,39 @@ def _morning_plan_reply(text: str) -> str | None:
 
 
 async def _handle_delete(args: str) -> str:
-    """Delete a meal or workout by ID. Usage: /刪 37"""
-    if not args.isdigit():
-        return "格式：/刪 [ID]\n例：/刪 37"
-    item_id = int(args)
-    # Try meal first, then workout
-    deleted = db.delete_meal(item_id)
-    if not deleted:
-        deleted = db.delete_workout(item_id)
-    return f"✅ #{item_id} 已刪除" if deleted else f"找不到 #{item_id}，請用 /今日 確認 ID"
+    """Delete a meal or workout by ID.
+
+    Usage:
+      /刪 37        — 刪飲食 #37
+      /刪 動 46     — 刪運動 #46
+      /刪 吃 37     — 刪飲食 #37（明確指定）
+    """
+    parts = args.split()
+    if not parts:
+        return "格式：/刪 [ID] 或 /刪 動 [ID]\n例：/刪 37  ／  /刪 動 46"
+
+    # Type-prefixed form: /刪 動 46 or /刪 吃 37
+    if len(parts) == 2 and parts[1].isdigit():
+        kind, id_str = parts
+        item_id = int(id_str)
+        if kind in ("動", "運動", "workout"):
+            ok = db.delete_workout(item_id)
+            return f"✅ 運動 #{item_id} 已刪除" if ok else f"找不到運動 #{item_id}"
+        if kind in ("吃", "飲食", "meal"):
+            ok = db.delete_meal(item_id)
+            return f"✅ 飲食 #{item_id} 已刪除" if ok else f"找不到飲食 #{item_id}"
+        return "格式：/刪 動 [ID] 或 /刪 吃 [ID]"
+
+    # Bare ID — try meal first, then workout (legacy behaviour)
+    if len(parts) == 1 and parts[0].isdigit():
+        item_id = int(parts[0])
+        if db.delete_meal(item_id):
+            return f"✅ 飲食 #{item_id} 已刪除\n（如果你要刪的是運動，用 /刪 動 {item_id}）"
+        if db.delete_workout(item_id):
+            return f"✅ 運動 #{item_id} 已刪除"
+        return f"找不到 #{item_id}，請用 /今日 確認 ID"
+
+    return "格式：/刪 [ID] 或 /刪 動 [ID]\n例：/刪 37  ／  /刪 動 46"
 
 
 async def _handle_update(args: str) -> str:
@@ -286,6 +316,11 @@ async def handle_image_message(
     if session and session["mode"] == "awaiting_exercise_input":
         from app.line.commands.exercise import handle_exercise_photo_input
         return await handle_exercise_photo_input(image_bytes, session.get("draft", {}), user_id)
+
+    # 重訓 menu phase: Apple Watch screenshot supplements the menu
+    if session and session["mode"] == "awaiting_exercise_list":
+        from app.line.commands.exercise import handle_strength_photo_input
+        return await handle_strength_photo_input(image_bytes, session.get("draft", {}), user_id)
 
     in_meal_flow = session and session["mode"] == "awaiting_food"
 
