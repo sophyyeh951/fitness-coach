@@ -131,6 +131,42 @@ async def test_handle_muscle_group_selection_shows_last_session():
 
 
 @pytest.mark.asyncio
+async def test_handle_muscle_group_selection_includes_ppl_program():
+    """重訓 → 部位 should also show today's PPL program template."""
+    with patch("app.line.commands.exercise.set_session"), \
+         patch("app.line.commands.exercise.db") as mock_db:
+        mock_db.get_last_workout_by_muscle_group.return_value = None
+        from app.line.commands.exercise import handle_muscle_group_selection
+        result = await handle_muscle_group_selection("__mg_legs__", "U123")
+    text = result.text
+    assert "今日課表" in text
+    assert "高腳杯深蹲" in text
+    assert "RDL" in text
+    assert "雙重漸進" in text
+
+
+@pytest.mark.asyncio
+async def test_last_session_shows_rir_when_present():
+    """RIR should appear in the 'last session' reference block."""
+    with patch("app.line.commands.exercise.set_session"), \
+         patch("app.line.commands.exercise.db") as mock_db:
+        mock_db.get_last_workout_by_muscle_group.return_value = {
+            "created_at": "2026-04-30T10:00:00",
+            "exercises": [
+                {"name": "硬舉", "weight_kg": 36, "reps": 10, "sets": 4, "rir": 1},
+                {"name": "划船", "weight_kg": 10, "reps": 10, "sets": 4},
+            ],
+            "notes": None,
+        }
+        from app.line.commands.exercise import handle_muscle_group_selection
+        result = await handle_muscle_group_selection("__mg_back__", "U123")
+    text = result.text
+    assert "RIR1" in text
+    # Exercise without RIR should not have RIR suffix
+    assert "划船 10kg 10下x4組" in text
+
+
+@pytest.mark.asyncio
 async def test_handle_muscle_group_selection_no_prior_session():
     with patch("app.line.commands.exercise.set_session"), \
          patch("app.line.commands.exercise.db") as mock_db:

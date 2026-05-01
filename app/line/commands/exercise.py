@@ -57,21 +57,28 @@ def _infer_muscle_group(text: str) -> str | None:
     return None
 
 
+def _format_exercise_line(e: dict) -> str:
+    """One exercise → '• 硬舉 36kg 10下x4組 RIR1' (RIR optional)."""
+    name = e.get("name", "?")
+    w = e.get("weight_kg")
+    weight_str = f" {w}kg" if w else ""
+    reps = e.get("reps", "")
+    sets = e.get("sets", "")
+    rir = e.get("rir")
+    rir_str = f" RIR{rir}" if rir is not None else ""
+    return f"• {name}{weight_str} {reps}下x{sets}組{rir_str}"
+
+
 def _format_last_session_reference(last: dict, muscle_group: str) -> str:
     """Render a 'last 臀腿 day' reference block to remind the user of weights/reps."""
     last_date = (last.get("created_at") or "")[:10]
     exercises = last.get("exercises") or []
     notes = last.get("notes")
 
-    lines = [f"📋 上次{muscle_group}（{last_date}）"]
+    lines = [f"📊 上次{muscle_group}（{last_date}）"]
     if exercises:
         for e in exercises:
-            name = e.get("name", "?")
-            w = e.get("weight_kg")
-            weight_str = f" {w}kg" if w else ""
-            reps = e.get("reps", "")
-            sets = e.get("sets", "")
-            lines.append(f"• {name}{weight_str} {reps}下x{sets}組")
+            lines.append(_format_exercise_line(e))
     else:
         lines.append("（沒有詳細菜單）")
     if notes:
@@ -99,8 +106,9 @@ def _strength_menu_prompt() -> str:
         "現在開始記今天：\n"
         "1. 傳 Apple Watch 截圖（自動讀消耗 / 時長）\n"
         "2. 把菜單貼過來，格式隨意：\n"
-        "   例：硬舉 36kg 10x4\n"
-        "      肩推 4kg 12x3"
+        "   例：硬舉 36kg 10x4 RIR1\n"
+        "      肩推 4kg 12x3 還剩2下\n"
+        "   （RIR = 離力竭還剩幾下，可不填）"
     )
 
 
@@ -211,8 +219,13 @@ async def handle_muscle_group_selection(text: str, user_id: str) -> str | TextMe
         draft={"workout_type": muscle_group, "muscle_group": muscle_group, "exercises": []},
     )
 
+    from app.programs.ppl import format_program_block
+    program = format_program_block(muscle_group)
     ref = _last_session_reference_text(muscle_group)
+
     body = f"💪 {muscle_group}\n\n"
+    if program:
+        body += f"{program}\n\n"
     if ref:
         body += f"{ref}\n\n"
     else:
@@ -387,12 +400,7 @@ def _build_strength_confirm_card(draft: dict) -> TextMessage:
 
     lines = []
     for e in exercises:
-        name = e.get("name", "?")
-        w = e.get("weight_kg")
-        weight_str = f" {w}kg" if w else ""
-        reps = e.get("reps", "")
-        sets = e.get("sets", "")
-        lines.append(f"• {name}{weight_str} {reps}下x{sets}組")
+        lines.append(_format_exercise_line(e))
     if not exercises:
         lines.append("（沒有菜單）")
 
@@ -474,25 +482,47 @@ async def _parse_exercise_list(text: str, workout_type: str) -> list[dict]:
     from app.config import GEMINI_API_KEY
 
     client = genai.Client(api_key=GEMINI_API_KEY)
-    prompt = f"""\
-解析以下重訓紀錄，轉成 JSON 陣列（不要 markdown）：
+    prompt = f"""把以下重訓紀錄解析成結構化資料。
 
 {text}
 
-格式（每個動作）：
-[{{"name": "動作名稱", "weight_kg": 數字或null, "reps": 數字或null, "sets": 數字或null, "notes": "備註或null"}}]
+欄位說明：
+- name: 動作名稱
+- weight_kg: 重量（kg），沒寫就是 null
+- reps: 每組次數
+- sets: 組數
+- rir: 離力竭還剩幾下（0~5 整數），辨識規則：
+    "RIR1" → 1；"還剩2下" / "差2下力竭" → 2；"力竭" / "AMRAP" → 0；沒提到 → null
+- notes: 其他備註（不要把 RIR / 力竭 / 還剩 N 下 放進這裡）"""
 
-直接輸出 JSON 陣列。
-"""
+    schema = types.Schema(
+        type=types.Type.ARRAY,
+        items=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "name": types.Schema(type=types.Type.STRING),
+                "weight_kg": types.Schema(type=types.Type.NUMBER, nullable=True),
+                "reps": types.Schema(type=types.Type.INTEGER, nullable=True),
+                "sets": types.Schema(type=types.Type.INTEGER, nullable=True),
+                "rir": types.Schema(type=types.Type.INTEGER, nullable=True),
+                "notes": types.Schema(type=types.Type.STRING, nullable=True),
+            },
+            required=["name", "weight_kg", "reps", "sets", "rir", "notes"],
+        ),
+    )
+
     try:
         response = await asyncio.to_thread(
             client.models.generate_content,
             model="gemini-2.5-flash",
             contents=prompt,
-            config=types.GenerateContentConfig(temperature=0.1),
+            config=types.GenerateContentConfig(
+                temperature=0.1,
+                response_mime_type="application/json",
+                response_schema=schema,
+            ),
         )
-        raw = response.text.strip().strip("```json").strip("```").strip()
-        return json.loads(raw)
+        return json.loads(response.text)
     except Exception:
         logger.exception("Failed to parse exercise list")
         return []
