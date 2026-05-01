@@ -97,17 +97,23 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(
         _morning_checkin,
         CronTrigger(hour=8, minute=0, timezone=TW_TZ),
+        misfire_grace_time=1800,
+        coalesce=True,
     )
     # Evening summary at 23:00 Taiwan time
     scheduler.add_job(
         _evening_summary,
         CronTrigger(hour=23, minute=0, timezone=TW_TZ),
+        misfire_grace_time=1800,
+        coalesce=True,
     )
     scheduler.add_job(
         _weekly_report,
         CronTrigger(day_of_week="sun", hour=20, minute=0, timezone=TW_TZ),
+        misfire_grace_time=3600,
+        coalesce=True,
     )
-    scheduler.add_job(_keep_alive, "interval", minutes=10)
+    scheduler.add_job(_keep_alive, "interval", minutes=5)
     scheduler.start()
     logger.info("Scheduler started — morning 8:00 + evening 21:30 (Taiwan time)")
     yield
