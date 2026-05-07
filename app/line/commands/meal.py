@@ -64,16 +64,24 @@ async def handle_meal_type_selection(text: str, user_id: str) -> str | TextMessa
     return f"好，{display}。\n傳照片或告訴我吃什麼 👇"
 
 
-async def handle_food_input(text: str, draft: dict, user_id: str) -> TextMessage:
+async def handle_food_input(text: str, draft: dict, user_id: str) -> str | TextMessage:
     """Parse food text and build the confirm card draft."""
     display = draft.get("meal_type_display", "")
     parsed = await parse_food_text(text)
+    if parsed.get("_parse_error"):
+        # Stay in awaiting_food mode so the user can retry without restarting /吃
+        return (
+            f"⚠️ 解析失敗（{parsed['_parse_error']}）\n\n"
+            "請再貼一次，或加多一點細節：\n"
+            "例：『燕麥粥 1碗 300kcal、蛋 2顆』\n"
+            "或：『早餐店蛋餅+豆漿』"
+        )
     new_draft = {**draft, **parsed}
     set_session(user_id, mode="awaiting_meal_confirm", draft=new_draft)
     return _build_meal_confirm_card(new_draft, display)
 
 
-async def handle_meal_correction(correction: str, draft: dict, user_id: str) -> TextMessage:
+async def handle_meal_correction(correction: str, draft: dict, user_id: str) -> str | TextMessage:
     """Apply a user correction to the existing draft and rebuild the confirm card."""
     display = draft.get("meal_type_display", "")
     correction_prompt = (
@@ -82,6 +90,11 @@ async def handle_meal_correction(correction: str, draft: dict, user_id: str) -> 
         f"請根據修改重新輸出完整的 JSON（同樣格式，不要 markdown）"
     )
     parsed = await parse_food_text(correction_prompt, is_correction=True)
+    if parsed.get("_parse_error"):
+        return (
+            f"⚠️ 修改失敗（{parsed['_parse_error']}）\n"
+            "請再說一次要改什麼，例：「藍莓改成 100g」"
+        )
     new_draft = {**draft, **parsed}
     set_session(user_id, mode="awaiting_meal_confirm", draft=new_draft)
     return _build_meal_confirm_card(new_draft, display, updated=True)

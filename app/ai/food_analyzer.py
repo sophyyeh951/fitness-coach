@@ -30,65 +30,85 @@ def _resize_image(image_bytes: bytes) -> bytes:
             return buf.getvalue()
 
 
+def _empty_meal_with_error(reason: str) -> dict:
+    """Empty meal payload tagged with an error so meal.py can show a real message."""
+    return {
+        "foods": [],
+        "total_calories": 0,
+        "total_protein": 0,
+        "total_carbs": 0,
+        "total_fat": 0,
+        "_parse_error": reason,
+    }
+
+
+def _strip_code_fences(raw: str) -> str:
+    """Remove ```json ... ``` wrappers Gemini sometimes adds despite instructions."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        # split on first newline to drop opening ```json (or ```)
+        parts = raw.split("\n", 1)
+        raw = parts[1] if len(parts) > 1 else raw[3:]
+    if raw.endswith("```"):
+        raw = raw.rsplit("```", 1)[0]
+    return raw.strip()
+
+
 async def analyze_food_photo(image_bytes: bytes) -> dict:
     """
     Analyze a food photo and return nutritional estimates.
 
     Returns dict with keys: foods, total_calories, total_protein,
-    total_carbs, total_fat, brief_comment
+    total_carbs, total_fat, brief_comment. On parse failure, includes
+    `_parse_error` so callers can show a real message instead of silent zeros.
     """
     resized = _resize_image(image_bytes)
 
-    response = await client.aio.models.generate_content(
-        model=MODEL,
-        contents=[
-            types.Part.from_text(text=FOOD_ANALYSIS_PROMPT),
-            types.Part.from_bytes(data=resized, mime_type="image/jpeg"),
-        ],
-        config=types.GenerateContentConfig(
-            temperature=0.3,
-            max_output_tokens=1024,
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
-        ),
-    )
-
-    raw_text = (response.text or "").strip()
-    # Strip markdown code fences if present
-    if raw_text.startswith("```"):
-        raw_text = raw_text.split("\n", 1)[1]
-    if raw_text.endswith("```"):
-        raw_text = raw_text.rsplit("```", 1)[0]
-    raw_text = raw_text.strip()
-
+    raw_text = ""
     try:
-        return json.loads(raw_text)
-    except json.JSONDecodeError:
-        logger.error("Failed to parse Gemini response as JSON: %s", raw_text)
-        return {
-            "foods": [],
-            "total_calories": 0,
-            "total_protein": 0,
-            "total_carbs": 0,
-            "total_fat": 0,
-            "brief_comment": f"辨識結果（非結構化）：{raw_text[:200]}",
-        }
+        response = await client.aio.models.generate_content(
+            model=MODEL,
+            contents=[
+                types.Part.from_text(text=FOOD_ANALYSIS_PROMPT),
+                types.Part.from_bytes(data=resized, mime_type="image/jpeg"),
+            ],
+            config=types.GenerateContentConfig(
+                temperature=0.3,
+                max_output_tokens=1024,
+                response_mime_type="application/json",
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            ),
+        )
+        raw_text = (response.text or "").strip()
+        if not raw_text:
+            logger.warning("analyze_food_photo: empty response from Gemini")
+            return _empty_meal_with_error("AI 沒回覆")
+        return json.loads(_strip_code_fences(raw_text))
+    except json.JSONDecodeError as e:
+        logger.warning("analyze_food_photo: JSON decode failed raw=%r err=%s", raw_text[:300], e)
+        return _empty_meal_with_error("AI 看圖回的格式有問題")
+    except Exception:
+        logger.exception("analyze_food_photo: unexpected error")
+        return _empty_meal_with_error("AI 暫時不可用")
 
 
 async def parse_food_text(text: str, is_correction: bool = False) -> dict:
     """Parse a free-text food description into structured nutrition data.
 
-    Returns dict with keys: foods, total_calories, total_protein, total_carbs, total_fat
+    Returns dict with keys: foods, total_calories, total_protein, total_carbs, total_fat.
+    On failure, includes a `_parse_error` key so the caller can surface a real message
+    to the user instead of a silent zero meal.
     """
+    import asyncio
     import json
     from google.genai import types
-    from app.config import GEMINI_API_KEY
 
     prompt = f"""\
-請把以下飲食描述解析成 JSON 格式（不要加 markdown）：
+請把以下飲食描述解析成 JSON：
 
 {text}
 
-格式：
+格式（純 JSON，不要 markdown 不要解釋文字）：
 {{
   "foods": [
     {{"name": "食物名稱", "portion": "份量", "calories": 數字, "protein": 數字, "carbs": 數字, "fat": 數字}}
@@ -98,24 +118,42 @@ async def parse_food_text(text: str, is_correction: bool = False) -> dict:
   "total_carbs": 數字,
   "total_fat": 數字
 }}
+
+注意：
+- calories/protein/carbs/fat 一定要是整數或小數，不能是字串或 null
+- 即使是飲料、調味料也要估熱量（蜂蜜、糖、鮮奶等）
+- 中文食物用常識估算（抹茶拿鐵約 80-150kcal、藍莓 50g 約 30kcal）
 """
+    raw = ""
     try:
-        import asyncio
         response = await asyncio.to_thread(
             client.models.generate_content,
             model=MODEL,
             contents=prompt,
-            config=types.GenerateContentConfig(temperature=0.2),
+            config=types.GenerateContentConfig(
+                temperature=0.2,
+                response_mime_type="application/json",  # force clean JSON
+            ),
         )
-        raw = response.text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        return json.loads(raw.strip())
+        raw = (response.text or "").strip()
+        if not raw:
+            logger.warning("parse_food_text: empty response from Gemini for text=%r", text)
+            return _empty_meal_with_error("AI 沒回覆")
+        cleaned = _strip_code_fences(raw)
+        parsed = json.loads(cleaned)
+        # sanity check: at least one food with non-zero calories
+        foods = parsed.get("foods") or []
+        total_cal = parsed.get("total_calories") or 0
+        if not foods and total_cal == 0:
+            logger.warning("parse_food_text: empty parse for text=%r raw=%r", text, raw[:200])
+            return _empty_meal_with_error("AI 看不懂這段描述")
+        return parsed
+    except json.JSONDecodeError as e:
+        logger.warning("parse_food_text: JSON decode failed for text=%r raw=%r err=%s", text, raw[:300], e)
+        return _empty_meal_with_error("AI 回的格式有問題")
     except Exception:
-        logger.exception("Failed to parse food text")
-        return {"foods": [], "total_calories": 0, "total_protein": 0, "total_carbs": 0, "total_fat": 0}
+        logger.exception("parse_food_text: unexpected error for text=%r", text)
+        return _empty_meal_with_error("AI 暫時不可用")
 
 
 def format_food_analysis(result: dict) -> str:
