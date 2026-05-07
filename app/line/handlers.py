@@ -35,7 +35,8 @@ from app.db import queries as db
 from app.line.session import get_session, clear_session, set_session
 from app.line.confirm import (
     CONFIRM_SENTINEL, CANCEL_SENTINEL, EDIT_SENTINEL,
-    MEAL_SENTINELS, NOTES_SKIP_SENTINEL, EXERCISE_SKIP_MENU_SENTINEL,
+    MEAL_SENTINELS, NOTES_SKIP_SENTINEL,
+    EXERCISE_SKIP_MENU_SENTINEL, EXERCISE_AI_SUGGEST_SENTINEL,
 )
 
 logger = logging.getLogger(__name__)
@@ -87,6 +88,7 @@ async def _handle_session(text: str, session: dict, user_id: str) -> str | LineT
         handle_notes_input,
         handle_notes_skip,
         handle_strength_skip_menu,
+        handle_ai_menu_suggest,
     )
     from app.line.commands.body import handle_body_confirm
 
@@ -122,6 +124,8 @@ async def _handle_session(text: str, session: dict, user_id: str) -> str | LineT
     if mode == "awaiting_exercise_list":
         if text == EXERCISE_SKIP_MENU_SENTINEL:
             return await handle_strength_skip_menu(draft, user_id)
+        if text == EXERCISE_AI_SUGGEST_SENTINEL:
+            return await handle_ai_menu_suggest(draft, user_id)
         if text == CANCEL_SENTINEL:
             clear_session(user_id)
             return "已取消，沒有儲存任何資料。"
@@ -167,7 +171,6 @@ async def _handle_command(text: str, user_id: str) -> str | LineTextMessage:
     from app.line.commands.body import start_body_flow
     from app.line.commands.simple import handle_rest, handle_help
     from app.line.commands.today import handle_today
-    from app.line.commands.next_session import handle_next_session
     from app.line.commands.report import handle_weekly_report
     from app.line.commands.schedule import handle_schedule
 
@@ -181,7 +184,6 @@ async def _handle_command(text: str, user_id: str) -> str | LineTextMessage:
         "/身體": lambda: start_body_flow(user_id),
         "/休息": lambda: handle_rest(args, user_id),
         "/今日": lambda: handle_today(),
-        "/下次": lambda: handle_next_session(args),
         "/週報": lambda: handle_weekly_report(),
         "/計畫": lambda: handle_schedule(args, user_id),
         "/?": lambda: handle_help(),

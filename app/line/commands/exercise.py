@@ -24,7 +24,7 @@ from linebot.v3.messaging import MessageAction, QuickReply, QuickReplyItem, Text
 from app.db import queries as db
 from app.line.confirm import (
     CONFIRM_SENTINEL, CANCEL_SENTINEL, NOTES_SKIP_SENTINEL,
-    EXERCISE_SKIP_MENU_SENTINEL,
+    EXERCISE_SKIP_MENU_SENTINEL, EXERCISE_AI_SUGGEST_SENTINEL,
     EXERCISE_SENTINELS, EXERCISE_TYPE_MAP,
     MUSCLE_GROUP_SENTINELS, MUSCLE_GROUP_MAP,
     build_confirm_card, build_quick_reply_prompt,
@@ -229,12 +229,13 @@ async def handle_muscle_group_selection(text: str, user_id: str) -> str | TextMe
     if ref:
         body += f"{ref}\n\n"
     else:
-        body += "（這個部位還沒有上次紀錄，下次就會幫你帶出來）\n\n"
+        body += "（這個部位還沒有上次紀錄，記了之後 [AI 建議菜單] 就能用）\n\n"
     body += _strength_menu_prompt() + "\n\n兩個都可以做，或只做其中一個 👇"
 
     return TextMessage(
         text=body,
         quick_reply=QuickReply(items=[
+            QuickReplyItem(action=MessageAction(label="AI 建議菜單", text=EXERCISE_AI_SUGGEST_SENTINEL)),
             QuickReplyItem(action=MessageAction(label="跳過菜單", text=EXERCISE_SKIP_MENU_SENTINEL)),
             QuickReplyItem(action=MessageAction(label="❌ 取消", text=CANCEL_SENTINEL)),
         ]),
@@ -339,6 +340,96 @@ async def handle_strength_skip_menu(draft: dict, user_id: str) -> TextMessage:
     return _build_strength_confirm_card(new_draft)
 
 
+def _ai_menu_quick_reply() -> QuickReply:
+    """Quick reply shown after AI menu suggestion — user can paste menu next."""
+    return QuickReply(items=[
+        QuickReplyItem(action=MessageAction(label="跳過菜單", text=EXERCISE_SKIP_MENU_SENTINEL)),
+        QuickReplyItem(action=MessageAction(label="❌ 取消", text=CANCEL_SENTINEL)),
+    ])
+
+
+async def handle_ai_menu_suggest(draft: dict, user_id: str) -> TextMessage:
+    """User tapped [AI 建議菜單] in awaiting_exercise_list mode.
+
+    Look up the last same-muscle-group session, ask Gemini for concrete
+    weight/reps suggestions, and return as a TextMessage. Stay in
+    awaiting_exercise_list so the user can paste today's menu next.
+    """
+    from app.config import GEMINI_API_KEY
+
+    muscle_group = draft.get("muscle_group")
+    if not muscle_group:
+        return TextMessage(
+            text="（這次的部位不是重訓部位，沒辦法給菜單建議。直接貼菜單或跳過 👇）",
+            quick_reply=_ai_menu_quick_reply(),
+        )
+
+    try:
+        last = db.get_last_workout_by_muscle_group(muscle_group)
+    except Exception:
+        logger.exception("AI suggest: failed to fetch last %s session", muscle_group)
+        last = None
+
+    if not last:
+        return TextMessage(
+            text=(
+                f"還沒有「{muscle_group}」的訓練紀錄，沒辦法給建議。\n"
+                "直接把菜單貼過來，下次就能幫你規劃了 👇"
+            ),
+            quick_reply=_ai_menu_quick_reply(),
+        )
+
+    last_date = (last.get("created_at") or "")[:10]
+    exercises = last.get("exercises") or []
+    notes = last.get("notes") or "無備註"
+
+    exercise_summary = "\n".join(
+        f"  • {e.get('name', '?')} {e.get('weight_kg', '')}kg "
+        f"{e.get('reps', '')}下x{e.get('sets', '')}組"
+        for e in exercises if e.get("name")
+    ) or "  （無詳細動作紀錄）"
+
+    prompt = f"""\
+你是健身教練小健。根據用戶上次「{muscle_group}」訓練，給這次的具體建議。
+
+上次訓練（{last_date}）：
+{exercise_summary}
+
+上次備註：{notes}
+
+請給出：
+1. 這次每個動作的具體重量/次數/組數建議（沿用或微調，不要憑空換動作）
+2. 需要特別注意的地方（根據備註）
+3. 最多一句總結
+
+格式：純文字，用 • 列點，不要 markdown，不超過 15 行。
+"""
+    try:
+        from google import genai
+        from google.genai import types
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(temperature=0.5),
+        )
+        body = (
+            f"📋 今天{muscle_group}建議（根據 {last_date}）\n\n"
+            f"{response.text.strip()}\n\n"
+            "練完後把菜單貼過來 👇"
+        )
+    except Exception:
+        logger.exception("AI suggest: Gemini call failed")
+        body = (
+            f"📊 上次{muscle_group}（{last_date}）：\n{exercise_summary}\n備註：{notes}\n\n"
+            "（AI 建議暫時不可用，先參考上次紀錄 👇）"
+        )
+
+    # Stay in awaiting_exercise_list so user can paste today's menu next.
+    return TextMessage(text=body, quick_reply=_ai_menu_quick_reply())
+
+
 async def handle_strength_photo_input(image_bytes: bytes, draft: dict, user_id: str) -> TextMessage:
     """Apple Watch screenshot during 重訓 menu phase — extract metrics, stay in mode."""
     from app.ai.image_analyzer import analyze_workout_photo
@@ -350,6 +441,7 @@ async def handle_strength_photo_input(image_bytes: bytes, draft: dict, user_id: 
         return TextMessage(
             text="（無法從圖片辨識 Apple Watch 數據，請改用文字告訴我，或直接貼菜單）",
             quick_reply=QuickReply(items=[
+                QuickReplyItem(action=MessageAction(label="AI 建議菜單", text=EXERCISE_AI_SUGGEST_SENTINEL)),
                 QuickReplyItem(action=MessageAction(label="跳過菜單", text=EXERCISE_SKIP_MENU_SENTINEL)),
                 QuickReplyItem(action=MessageAction(label="❌ 取消", text=CANCEL_SENTINEL)),
             ]),
@@ -384,6 +476,7 @@ async def handle_strength_photo_input(image_bytes: bytes, draft: dict, user_id: 
             "現在把菜單貼過來，或直接「跳過菜單」存檔 👇"
         ),
         quick_reply=QuickReply(items=[
+            QuickReplyItem(action=MessageAction(label="AI 建議菜單", text=EXERCISE_AI_SUGGEST_SENTINEL)),
             QuickReplyItem(action=MessageAction(label="跳過菜單", text=EXERCISE_SKIP_MENU_SENTINEL)),
             QuickReplyItem(action=MessageAction(label="❌ 取消", text=CANCEL_SENTINEL)),
         ]),
@@ -461,7 +554,7 @@ async def handle_notes_input(notes_text: str, draft: dict, user_id: str) -> str:
             combined = f"{existing_notes}\n{notes_text}".strip() if existing_notes else notes_text
             db.update_workout(latest_id, {"notes": combined})
         clear_session(user_id)
-        return f"📝 備註已記下。下次練這個部位前用 /下次 就會提醒你！\n\n{_today_intake_summary()}"
+        return f"📝 備註已記下。下次練這個部位時，點 [AI 建議菜單] 就會幫你帶出來！\n\n{_today_intake_summary()}"
     except Exception:
         logger.exception("Failed to save workout notes")
         clear_session(user_id)

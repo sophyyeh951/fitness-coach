@@ -28,6 +28,7 @@ CANCEL_SENTINEL = "__cancel__"
 EDIT_SENTINEL = "__edit__"
 NOTES_SKIP_SENTINEL = "__notes_skip__"
 EXERCISE_SKIP_MENU_SENTINEL = "__ex_skip_menu__"
+EXERCISE_AI_SUGGEST_SENTINEL = "__ex_ai_suggest__"
 
 MEAL_SENTINELS = {
     "早餐": "__meal_breakfast__",

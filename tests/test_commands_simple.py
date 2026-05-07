@@ -44,5 +44,5 @@ async def test_handle_help_returns_command_guide():
     assert "/動" in result
     assert "/身體" in result
     assert "/今日" in result
-    assert "/下次" in result
     assert "/週報" in result
+    assert "AI 建議菜單" in result

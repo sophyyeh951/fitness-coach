@@ -176,7 +176,7 @@ async def test_handle_muscle_group_selection_no_prior_session():
 
     text = result.text
     assert "胸肩" in text
-    assert "下次" in text or "還沒有" in text
+    assert "還沒有" in text or "AI 建議菜單" in text
 
 
 @pytest.mark.asyncio
