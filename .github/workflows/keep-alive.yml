@@ -29,7 +29,7 @@ jobs:
           # Render cold start can take 50s+, so allow up to 90s.
           # Two attempts in case the first wakes it up but times out.
           for attempt in 1 2; do
-            if curl -fsS --max-time 90 https://fitness-coach-hv3f.onrender.com/health; then
+            if curl -fsS --max-time 90 https://fitness-coach-us.onrender.com/health; then
               echo
               echo "✅ Service is awake (attempt $attempt)"
               exit 0
